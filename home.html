@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Crop Advisory System</title>
+    <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+</head>
+<body>
+    <!-- Location Modal -->
+    <div id="locationModal" class="modal">
+        <div class="modal-content">
+            <!-- Close Button -->
+            <button id="closeModalBtn" class="close-btn">
+                <i class="bi bi-x-lg"></i>
+            </button>
+            
+            <h2>Set Your Location</h2>
+            <p>To provide accurate weather data and crop recommendations</p>
+            <div class="location-options">
+                <button id="autoDetectBtn" class="btn-primary">
+                    <i class="bi bi-geo-alt"></i> Auto Detect Location
+                </button>
+                <div class="divider">OR</div>
+                <div class="manual-location">
+                    <input type="text" id="manualLocation" placeholder="Enter your city or region">
+                    <button id="manualSubmitBtn" class="btn-secondary">Submit</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="webclass">
+        <!-- Top Bar -->
+        <div id="top_bar">
+            <i class="bi bi-list" id="menuToggle"></i>
+            <h1 class="c_head">Smart Crop Advisory System</h1>
+            <div id="weatherWidget" class="weather-widget">
+                <i class="bi bi-cloud-sun"></i>
+                <span id="weatherInfo">Loading weather...</span>
+            </div>
+        </div>
+
+        <!-- Side Navigation -->
+        <div id="side_nav" class="side-nav">
+            <div class="nav-header">
+                <h3>Navigation</h3>
+                <i class="bi bi-x-lg" id="closeNav"></i>
+            </div>
+            <ul class="nav-menu">
+                <li><a href="#" class="nav-item active" data-page="home"><i class="bi bi-house"></i> Home Dashboard</a></li>
+                <li><a href="#" class="nav-item" data-page="plants"><i class="bi bi-flower1"></i> Select Plants</a></li>
+                <li><a href="#" class="nav-item" data-page="pest"><i class="bi bi-bug"></i> Pest & Disease Detection</a></li>
+                <li><a href="#" class="nav-item" data-page="weather"><i class="bi bi-cloud-sun"></i> Weather History</a></li>
+                <li><a href="#" class="nav-item" data-page="calendar"><i class="bi bi-calendar-event"></i> Crop Calendar</a></li>
+                
+                <!-- Fertilizer Recommendation -->
+                <li><a href="#" class="nav-item" data-page="fertilizer"><i class="bi bi-droplet-fill"></i> Fertilizer Recommendation</a></li>
+                <li><a href="#" class="nav-item" id="logoutBtn"><i class="bi bi-box-arrow-right"></i> Logout</a></li>
+            </ul>
+        </div>
+
+        <!-- Main Content Area -->
+        <div id="middle_part" class="main-content">
+            <!-- Home Dashboard -->
+            <div id="homePage" class="page active">
+                <div class="page-header">
+                    <h2>Farm Dashboard</h2>
+                    <div class="location-display">
+                        <i class="bi bi-geo-alt"></i>
+                        <span id="currentLocation">Location not set</span>
+                        <button id="changeLocation" class="btn-small">Change</button>
+                    </div>
+                </div>
+                
+                <div class="dashboard-grid">
+                    <div class="dashboard-card">
+                        <h3>Current Crop</h3>
+                        <div id="currentCrop" class="crop-info">
+                            <p>No crop selected</p>
+                        </div>
+                    </div>
+                    
+                    <div class="dashboard-card">
+                        <h3>Growth Progress</h3>
+                        <div class="progress-container">
+                            <div class="progress-bar">
+                                <div class="progress-fill" style="width: 0%"></div>
+                            </div>
+                            <span class="progress-text">0% Complete</span>
+                        </div>
+                    </div>
+                    
+                    <div class="dashboard-card">
+                        <h3>Today's Tasks</h3>
+                        <div id="todaysTasks" class="tasks-list">
+                            <p>No tasks scheduled</p>
+                        </div>
+                    </div>
+                    
+                    <div class="dashboard-card">
+                        <h3>Weather Impact</h3>
+                        <div id="weatherImpact" class="impact-info">
+                            <p>Weather data needed</p>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Plant Selection Page -->
+            <div id="plantsPage" class="page">
+                <h2>Select Your Crops</h2>
+                <div class="plants-grid">
+                    <!-- Plants will be populated by JavaScript -->
+                </div>
+            </div>
+
+            <!-- Pest Detection Page -->
+            <div id="pestPage" class="page">
+                <h2>Pest & Disease Detection</h2>
+                <div class="upload-area">
+                    <i class="bi bi-cloud-arrow-up"></i>
+                    <p>Upload plant image for analysis</p>
+                    <input type="file" id="imageUpload" accept="image/*">
+                    <button class="btn-primary" onclick="document.getElementById('imageUpload').click()">
+                        Choose Image
+                    </button>
+                </div>
+                <div id="detectionResult" class="result-area"></div>
+            </div>
+
+            <!-- Weather History Page -->
+            <div id="weatherPage" class="page">
+                <h2>Weather History & Forecast</h2>
+                <div class="weather-container">
+                    <div class="past-weather">
+                        <h3>Past 10 Days</h3>
+                        <div id="pastWeather" class="weather-days"></div>
+                    </div>
+                    <div class="future-weather">
+                        <h3>Next 7 Days Forecast</h3>
+                        <div id="futureWeather" class="weather-days"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Crop Calendar Page -->
+            <div id="calendarPage" class="page">
+                <h2>Crop Management Calendar</h2>
+                <div id="calendar" class="calendar-container">
+                    <!-- Calendar will be populated by JavaScript -->
+                </div>
+            </div>
+
+            <!-- Fertilizer Recommendation Page -->
+            <div id="fertilizerPage" class="page">
+                <h2>Fertilizer Recommendation</h2>
+                <div class="fertilizer-container">
+                    <div class="fert-form">
+                        <label for="fertCrop"><i class="bi bi-flower1"></i> Crop Type</label>
+                        <select id="fertCrop"></select>
+
+                        <label for="fertSoilType"><i class="bi bi-diagram-2"></i> Soil Type</label>
+                        <select id="fertSoilType"></select>
+
+                        <button id="getFertilizerBtn" class="btn-primary"><i class="bi bi-rocket"></i> Get Recommendations</button>
+                    </div>
+
+                    <div id="fertResults" class="fert-results">
+                        <!-- Recommendations will be rendered here -->
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bottom Bar -->
+        <div id="bottom_bar" class="bottom-bar">
+            <p>&copy; 2024 Smart Crop Advisory System | CSD415 Project</p>
+        </div>
+    </div>
+
+    <script src="home.js"></script>
+</body>
+</html>
