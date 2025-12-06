@@ -1,5 +1,7 @@
 # smart-crop-advisory-system
 
+<img width="1078" height="605" alt="image" src="https://github.com/user-attachments/assets/61d8bbfe-7eb6-4b7a-b165-dd310185ec15" />
+
 Overview
 
 The Smart Agriculture Advisory System is a web-based intelligent platform designed to assist farmers with data-driven, personalized agricultural recommendations. By integrating multiple computational models and real-time environmental data, the system provides stage-specific guidance throughout the crop lifecycle. It addresses challenges such as unpredictable climate conditions, pest infestations, and nutrient deficiencies, while optimizing resource usage.
