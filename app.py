@@ -16,6 +16,48 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+# --- Keras model for image-based pest/disease detection (H5) ---
+try:
+    from tensorflow.keras.models import load_model
+    from tensorflow.keras.preprocessing.image import img_to_array
+    from PIL import Image
+    import io
+except Exception:
+    # If imports fail, we'll handle at runtime when endpoint is called
+    load_model = None
+    img_to_array = None
+    Image = None
+    io = None
+
+# Global holder for the Keras model and labels
+crop_model = None
+class_labels = []
+
+def initialize_keras_model():
+    global crop_model, class_labels
+    model_path = os.path.join('models', 'crop_disease_pest_model.h5')
+    dataset_dir = os.path.join('dataset')
+    try:
+        if load_model and os.path.exists(model_path):
+            crop_model = load_model(model_path)
+            print('✅ Keras H5 model loaded from', model_path)
+        else:
+            print('Keras load_model not available or model file missing:', model_path)
+
+        # Build class labels from dataset folder structure if available
+        if os.path.isdir(dataset_dir):
+            class_labels = sorted([d for d in os.listdir(dataset_dir) if os.path.isdir(os.path.join(dataset_dir, d))])
+            print('Detected class labels:', class_labels)
+        else:
+            class_labels = []
+    except Exception as e:
+        print('Failed to initialize Keras model:', e)
+        crop_model = None
+        class_labels = []
+
+# Initialize model at startup (best-effort)
+initialize_keras_model()
+
 app = Flask(__name__)
 CORS(app)
 
@@ -684,6 +726,52 @@ def health_check():
         'timestamp': datetime.now().isoformat(),
         'svm_model': 'loaded' if decision_engine.svm_model else 'rule_based'
     })
+
+
+@app.route('/api/predict', methods=['POST'])
+def api_predict():
+    """Accepts an image file (multipart/form-data) and returns predictions using the H5 model."""
+    global crop_model, class_labels
+
+    # Support a simple health check from the frontend
+    if request.is_json:
+        body = request.get_json()
+        if body.get('test'):
+            return jsonify({'ok': bool(crop_model), 'labels_count': len(class_labels)})
+
+    # Ensure model is loaded
+    if crop_model is None:
+        return jsonify({'error': 'Model not loaded on server'}), 500
+
+    if 'image' not in request.files:
+        return jsonify({'error': 'No image file provided'}), 400
+
+    file = request.files['image']
+    if file.filename == '':
+        return jsonify({'error': 'Empty filename'}), 400
+
+    try:
+        img = Image.open(file.stream).convert('RGB')
+        img = img.resize((224, 224))
+        arr = img_to_array(img) / 255.0
+        arr = np.expand_dims(arr, axis=0)
+
+        preds = crop_model.predict(arr)
+        probs = preds[0].tolist()
+
+        # Build top-3 list
+        indexed = list(enumerate(probs))
+        indexed.sort(key=lambda x: x[1], reverse=True)
+        topk = indexed[:3]
+        results = []
+        for idx, score in topk:
+            label = class_labels[idx] if idx < len(class_labels) else f'Class {idx}'
+            results.append({'label': label, 'score': float(score)})
+
+        return jsonify({'predictions': results, 'raw': probs})
+    except Exception as e:
+        print('Prediction error:', e)
+        return jsonify({'error': str(e)}), 500
 
 @app.route('/api/weather', methods=['POST'])
 def get_weather():
