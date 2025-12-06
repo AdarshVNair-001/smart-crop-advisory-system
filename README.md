@@ -1,4 +1,4 @@
-# smart-crop-advisory-ssytem
+# smart-crop-advisory-system
 
 Overview
 
@@ -11,9 +11,9 @@ Features
 
 1. Crop Input & Lifecycle Scheduling
 
-  🟢. Users enter crop type and planting date.
-  🟢. System fetches real-time + historical weather data via APIs.
-  🟢. Generates a crop-stage timeline with recommended operations.
+  -🟢. Users enter crop type and planting date.
+  -🟢. System fetches real-time + historical weather data via APIs.
+  -🟢. Generates a crop-stage timeline with recommended operations.
 <img width="1340" height="534" alt="image" src="https://github.com/user-attachments/assets/46f6bd4f-f54b-4033-aa99-8cbfaba5bb5c" />
 
 <img width="1345" height="622" alt="image" src="https://github.com/user-attachments/assets/09fd7529-6b37-4360-bee2-336ea90ec426" />
@@ -25,16 +25,16 @@ Features
 
 2. Machine Learning–Driven Decisions
 
-  🟢Decision Tree Model → Irrigation & nutrient guidelines under structured conditions.
-  🟢Support Vector Machine (SVM) → Resolves ambiguous or overlapping decision cases.
-  🟢LSTM Network → Weather pattern prediction for proactive scheduling.
-  🟢Random Forest Model → Fertilizer recommendations based on crop & soil conditions.
-  🟢CNN Model → Image-based detection of plant pests & diseases.
+  -🟢Decision Tree Model → Irrigation & nutrient guidelines under structured conditions.
+  -🟢Support Vector Machine (SVM) → Resolves ambiguous or overlapping decision cases.
+  -🟢LSTM Network → Weather pattern prediction for proactive scheduling.
+  -🟢Random Forest Model → Fertilizer recommendations based on crop & soil conditions.
+  -🟢CNN Model → Image-based detection of plant pests & diseases.
 
 3. Pest & Disease Image Detection
 
-  🟢Users upload an image of a leaf/plant or pest
-  🟢identifies the uploded image based on cnn model
+  -🟢Users upload an image of a leaf/plant or pest
+  -🟢identifies the uploded image based on cnn model
   
   <img width="1344" height="354" alt="image" src="https://github.com/user-attachments/assets/8566f3f4-73b1-4a29-bc14-045e8a329cf0" />
   
@@ -42,12 +42,12 @@ Features
 
 4. Fertilizer Recommendation System
    
-   🟢Users input plant type and soil type 
-   🟢The Random Forest model evaluates the crop–soil combination and predicts the optimal fertilizer needed for healthy growth.
+   -🟢Users input plant type and soil type 
+   -🟢The Random Forest model evaluates the crop–soil combination and predicts the optimal fertilizer needed for healthy growth.
    The output includes:
-   🟢Recommended fertilizer
-   🟢Reason for recommendation, based on nutrient requirements and soil characteristics.
-   🟢Ensures smart nutrient management by matching fertilizers to both crop needs and soil nutrient behavior.
+   -🟢Recommended fertilizer
+   -🟢Reason for recommendation, based on nutrient requirements and soil characteristics.
+   -🟢Ensures smart nutrient management by matching fertilizers to both crop needs and soil nutrient behavior.
    
 <img width="1340" height="599" alt="image" src="https://github.com/user-attachments/assets/6f5c8fcc-7dfc-4100-8830-1b2af09672da" />
 
@@ -82,21 +82,36 @@ Users receive tailored guidance to optimize crop yield and resource usage.
 
 Steps to Run the Project
 
-1. Clone the Repository
+-1. Clone the Repository
+
+   ```sh
    git clone https://github.com/AdarshVNair-001/smart-crop-advisory-system.git
    cd smart-crop-advisory-system
-   
-3. Create a virtual environment
+   ```
+
+-2. Create a virtual environment
+
+```sh
    python -m venv venv
+```
 
-4. Install all dependencies
-   pip install -r backend/requirements.txt
+-3. Install all dependencies
 
-5. Run the Backend Server
+```sh
+pip install -r backend/requirements.txt
+```
+
+-4. Run the Backend Server
+
+```sh
    python app.py
+```
 
-6. Run the Frontend
+-5. Run the Frontend
+
+```sh
    frontend/index.html
-   
+   ```
+
 License
 This project uses publicly available datasets from Kaggle.
