@@ -44,6 +44,7 @@ const MODEL_CONFIG = {
 let tfModel = null;
 let onnxSession = null;
 let labels = null;
+let modelLoaded = false;
 
 const previewCanvas = document.createElement('canvas');
 previewCanvas.id = 'previewCanvas';
@@ -1014,10 +1015,7 @@ function setupDirectNavigationListeners() {
             return;
         }
         
-        const newItem = item.cloneNode(true);
-        item.parentNode.replaceChild(newItem, item);
-        
-        newItem.addEventListener('click', function(e) {
+        item.addEventListener('click', function(e) {
             e.preventDefault();
             console.log('Nav item clicked:', this.id, this.getAttribute('data-page'));
             
@@ -1055,13 +1053,27 @@ function toggleNavigation() {
     }
     
     if (menuToggle) {
-        if (isOpening) {
-            menuToggle.innerHTML = '<i class="bi bi-x-lg"></i>';
-            document.body.style.overflow = 'hidden';
+        // Determine the actual icon element. The markup sometimes uses
+        // <i id="menuToggle" class="bi bi-list"></i> or a container
+        // that contains an <i> child. Handle both cases to avoid
+        // creating nested <i> elements.
+        let iconEl = null;
+
+        if (menuToggle.tagName && menuToggle.tagName.toLowerCase() === 'i') {
+            iconEl = menuToggle;
+        } else if (menuToggle.classList && menuToggle.classList.contains('bi')) {
+            iconEl = menuToggle;
         } else {
-            menuToggle.innerHTML = '<i class="bi bi-list"></i>';
-            document.body.style.overflow = '';
+            iconEl = menuToggle.querySelector('i');
+            if (!iconEl) {
+                iconEl = document.createElement('i');
+                menuToggle.appendChild(iconEl);
+            }
         }
+
+        // Set the icon class instead of appending/removing nodes
+        iconEl.className = isOpening ? 'bi bi-x-lg' : 'bi bi-list';
+        document.body.style.overflow = isOpening ? 'hidden' : '';
     }
     
     console.log('Navigation state:', isOpening ? 'open' : 'closed');
@@ -1095,7 +1107,9 @@ function navigateToPage(pageName) {
 
     currentPage = pageName;
     
-    if (window.innerWidth <= 768) {
+    // Always close the navbar when navigating to a page
+    const sideNav = document.getElementById('side_nav');
+    if (sideNav && sideNav.classList.contains('active')) {
         toggleNavigation();
     }
 
@@ -2195,34 +2209,26 @@ function saveObservationLocally(observation) {
 // ML MODEL FUNCTIONS
 // ---------------------
 async function loadModel() {
-    await loadLabels();
-
-    for (const backend of MODEL_CONFIG.backendPreference) {
-        if (backend === 'tfjs') {
-            if (!window.tf) {
-                await injectScript('https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.12.0/dist/tf.min.js');
-                await new Promise(r => setTimeout(r, 100));
-            }
-            const ok = await tryLoadTFJS();
-            if (ok) { 
-                showNotification('info', 'ML Model Loaded', 'TensorFlow.js model ready for disease detection.');
-                return; 
-            }
-        }
-        if (backend === 'onnx') {
-            if (!window.ort) {
-                await injectScript('https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.min.js');
-                await new Promise(r => setTimeout(r, 100));
-            }
-            const ok = await tryLoadONNX();
-            if (ok) { 
-                showNotification('info', 'ML Model Loaded', 'ONNX model ready for disease detection.');
-                return; 
+    // Verify backend H5 model availability. Frontend will use backend for predictions.
+    try {
+        const resp = await fetch(`${API_BASE_URL}/predict`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ test: true })
+        });
+        if (resp.ok) {
+            const j = await resp.json();
+            if (j.ok) {
+                modelLoaded = true;
+                showNotification('info', 'ML Model Loaded', 'Server-side H5 model is ready.');
+                return;
             }
         }
+        console.warn('Backend predict endpoint did not return ok');
+    } catch (e) {
+        console.warn('Could not reach backend predict endpoint:', e.message);
     }
-
-    console.warn('No browser model loaded. Image analysis will be limited.');
+    console.warn('No ML model available (frontend will show manual analysis).');
 }
 
 async function loadLabels() {
@@ -2314,24 +2320,27 @@ function handleImageUpload(event) {
 
 async function predictFromFile(file) {
     if (!file) return;
-    const img = new Image();
-    const reader = new FileReader();
-    reader.onload = (ev) => img.src = ev.target.result;
-    reader.readAsDataURL(file);
 
-    img.onload = async () => {
-        const [sx, sy, sW, sH] = getCenterCropParams(img.width, img.height, MODEL_CONFIG.inputSize, MODEL_CONFIG.inputSize);
-        previewCtx.clearRect(0,0,MODEL_CONFIG.inputSize,MODEL_CONFIG.inputSize);
-        previewCtx.drawImage(img, sx, sy, sW, sH, 0, 0, MODEL_CONFIG.inputSize, MODEL_CONFIG.inputSize);
+    // Send image to backend H5 model for prediction
+    const formData = new FormData();
+    formData.append('image', file);
 
-        if (tfModel) {
-            await predictTF(previewCanvas);
-        } else if (onnxSession) {
-            await predictONNX(previewCanvas);
+    try {
+        const resp = await fetch(`${API_BASE_URL}/predict`, {
+            method: 'POST',
+            body: formData
+        });
+        if (!resp.ok) throw new Error('Server error ' + resp.status);
+        const data = await resp.json();
+        if (data.predictions && data.predictions.length) {
+            renderResults(data.predictions);
         } else {
-            showManualAnalysisForm(img.src);
+            showManualAnalysisForm(URL.createObjectURL(file));
         }
-    };
+    } catch (err) {
+        console.error('Prediction failed:', err);
+        showManualAnalysisForm(URL.createObjectURL(file));
+    }
 }
 
 function getCenterCropParams(w, h, targetW, targetH) {
@@ -2415,7 +2424,8 @@ function renderResults(topList) {
     } else {
         html += `<div class="result-list">`;
         for (const item of topList) {
-            const label = labels && labels[item.idx] ? labels[item.idx] : `Class ${item.idx}`;
+            // Support two formats: {idx, score} (old) or {label, score} (backend)
+            const label = item.label ? item.label : (labels && typeof item.idx !== 'undefined' && labels[item.idx] ? labels[item.idx] : (item.idx !== undefined ? `Class ${item.idx}` : 'Unknown'));
             const confidence = (item.score * 100).toFixed(1);
             const isProblem = label.toLowerCase().includes('disease') || label.toLowerCase().includes('pest');
             
@@ -2444,7 +2454,7 @@ function renderResults(topList) {
         
         html += `
             <div class="result-actions">
-                <button class="btn btn-primary" onclick="logDetection('${topList[0]?.idx}')">
+                <button class="btn btn-primary" onclick="logDetection('${encodeURIComponent(topList[0]?.label || topList[0]?.idx || '')}', ${topList[0]?.score || 0})">
                     <i class="bi bi-save"></i> Log Detection
                 </button>
                 <button class="btn btn-outline" onclick="handleImageUpload(event)">
@@ -2616,51 +2626,55 @@ function getAdviceForProblem(problem) {
     return 'Monitor closely and adjust care practices.';
 }
 
-async function logDetection(detectionId) {
+async function logDetection(detectionLabelEncoded, detectionScore = 0) {
     if (!currentPlantingId) {
         showNotification('warning', 'No Active Crop', 'Please select a crop first.');
         return;
     }
-    
+
+    const detectionLabel = detectionLabelEncoded ? decodeURIComponent(detectionLabelEncoded) : 'Unknown';
     try {
         const response = await fetch(`${API_BASE_URL}/crop/${currentPlantingId}/image-analysis`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                detected_disease: 'Unknown',
-                detected_pests: 'Unknown',
-                pest_confidence: 0.5,
-                overall_health_score: 75
+                detected_disease: detectionLabel,
+                detected_pests: null,
+                disease_confidence: detectionScore || 0,
+                overall_health_score: Math.max(0, 100 - (detectionScore ? (detectionScore * 100 * 0.5) : 25))
             })
         });
-        
+
         if (response.ok) {
             showNotification('success', 'Detection Logged', 'Added to crop history.');
         } else {
             const logs = JSON.parse(localStorage.getItem('detectionLogs') || '[]');
             logs.push({
                 planting_id: currentPlantingId,
-                detection_id: detectionId,
+                detection_label: detectionLabel,
+                detection_score: detectionScore,
                 timestamp: new Date().toISOString(),
                 type: 'automatic'
             });
             localStorage.setItem('detectionLogs', JSON.stringify(logs));
             showNotification('success', 'Detection Saved Locally', 'Added to local history.');
         }
-        
+
         await getAIRecommendation(currentPlantingId);
-        
+
     } catch (error) {
         console.error('Error logging detection:', error);
         const logs = JSON.parse(localStorage.getItem('detectionLogs') || '[]');
         logs.push({
             planting_id: currentPlantingId,
-            detection_id: detectionId,
+            detection_label: detectionLabel,
+            detection_score: detectionScore,
             timestamp: new Date().toISOString(),
-            type: 'automatic'
+            type: 'automatic',
+            error: error.message
         });
         localStorage.setItem('detectionLogs', JSON.stringify(logs));
-        showNotification('success', 'Detection Saved Locally', 'Added to local history.');
+        showNotification('warning', 'Logged Locally', 'Saved detection locally due to network error.');
     }
 }
 
