@@ -54,4 +54,5 @@ for img_file in os.listdir(TEST_FOLDER):
     if img_file.lower().endswith(('.jpg', '.jpeg', '.png')):
         predict_image(os.path.join(TEST_FOLDER, img_file))
 
+model.summary()
 

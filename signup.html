@@ -1,0 +1,58 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Create Account</title>
+
+  <link rel="stylesheet" href="style.css">
+
+  <!-- Supabase SDK -->
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+
+  <!-- Signup logic -->
+  <script src="signup.js" defer></script>
+</head>
+<body>
+
+  <div id="webclass">
+    <h2>Create Account</h2>
+
+    <input
+      type="text"
+      id="fullName"
+      class="uname"
+      placeholder="Full Name"
+      required
+    >
+    <br>
+
+    <input
+      type="email"
+      id="email"
+      class="uname"
+      placeholder="Email"
+      required
+    >
+    <br>
+
+    <input
+      type="password"
+      id="password"
+      class="pword"
+      placeholder="Password"
+      required
+    >
+    <br>
+
+    <button class="submit" id="signupBtn">Create Account</button>
+
+    <div id="error_msg" style="display:none;color:red;margin-top:10px;"></div>
+
+    <p style="margin-top:15px;">
+      Already have an account?
+      <a href="index.html">Login</a>
+    </p>
+  </div>
+
+</body>
+</html>
