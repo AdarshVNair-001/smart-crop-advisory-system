@@ -1,17 +1,6 @@
 // ============================================
-// home.js — Smart Crop System (Complete Supabase Integration)
+// home.js — Smart Crop System (With Supabase User Progress)
 // ============================================
-
-// ============================
-// Supabase config
-// ============================
-const supabaseUrl = "https://alezsadxhbqozzfxzios.supabase.co";
-const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsZXpzYWR4aGJxb3p6Znh6aW9zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4OTkyNDMsImV4cCI6MjA4MjQ3NTI0M30.G4fU1jYvZSxuE0fVbAkKe-2WPgBKCe5lwieUyKico0I";
-
-const supabase = window.supabase.createClient(
-  supabaseUrl,
-  supabaseKey
-);
 
 // Global variables
 let userLocation = null;
@@ -20,7 +9,7 @@ let currentPage = 'home';
 let currentWeatherData = null;
 const API_BASE_URL = 'http://localhost:5000/api';
 
-// Available crops data
+// Available crops data (matching database)
 const crops = [
     { id: 1, name: 'Tomato', icon: 'bi-flower1', season: 'Summer', duration: 110 },
     { id: 2, name: 'Rice', icon: 'bi-flower2', season: 'Monsoon', duration: 150 },
@@ -34,13 +23,23 @@ const crops = [
 let currentUser = null;
 let currentPlantingId = null;
 let progressUpdateInterval = null;
-const DEMO_USER_ID = 999;
+
+// UI control flags
+let highlightedPlantingId = null; // for clicking card highlight only (does not open detail)
+let showTasksAndProgress = false; // main dashboard tasks/progress hidden by default
+
+
+// Demo user ID (for when not logged in)
+const DEMO_USER_ID = 'demo-user-999';
+
+// Global variables for multiple crops
 let userCrops = [];
 
-// Theme management
-let currentTheme = localStorage.getItem('theme') || 'light';
+// Supabase configuration
+const supabaseUrl = "https://alezsadxhbqozzfxzios.supabase.co";
+const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsZXpzYWR4aGJxb3p6Znh6aW9zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4OTkyNDMsImV4cCI6MjA4MjQ3NTI0M30.G4fU1jYvZSxuE0fVbAkKe-2WPgBKCe5lwieUyKico0I";
 
-// Model config
+// MODEL CONFIG & GLOBALS
 const MODEL_CONFIG = {
   tfjsModelUrl: './models/tfjs/model.json',
   onnxModelUrl: './models/model.onnx',
@@ -65,6 +64,8 @@ let tfModel = null;
 let onnxSession = null;
 let labels = null;
 let modelLoaded = false;
+
+// ML Models
 let svmModel = null;
 let svmScaler = null;
 let svmFeatures = null;
@@ -83,1365 +84,94 @@ previewCanvas.style = 'display:none;';
 document.body.appendChild(previewCanvas);
 const previewCtx = previewCanvas.getContext('2d');
 
-// ============================
-// THEME MANAGEMENT
-// ============================
+// Expose functions to global scope
+window.navigateToPage = navigateToPage;
+window.selectCropForDetail = selectCropForDetail;
+window.viewCropDetails = viewCropDetails;
+window.removeCrop = removeCrop;
+window.showAllCrops = showAllCrops;
+window.copyFertilizerInfo = copyFertilizerInfo;
+window.findAlternative = findAlternative;
 
-function initTheme() {
-    // Set initial theme
-    applyTheme(currentTheme);
-    
-    // Create theme toggle in header if it doesn't exist
-    createThemeToggle();
-    
-    // Listen for system theme changes
-    if (window.matchMedia) {
-        const prefersDark = window.matchMedia('(prefers-color-scheme: dark)');
-        prefersDark.addEventListener('change', e => {
-            if (!localStorage.getItem('theme')) {
-                applyTheme(e.matches ? 'dark' : 'light');
-            }
-        });
-    }
-}
-
-function createThemeToggle() {
-    const headerActions = document.querySelector('.header-actions');
-    if (!headerActions) return;
-    
-    const existingToggle = document.querySelector('.theme-toggle');
-    if (existingToggle) return;
-    
-    const themeToggle = document.createElement('button');
-    themeToggle.className = 'theme-toggle';
-    themeToggle.innerHTML = currentTheme === 'dark' ? 
-        '<i class="bi bi-sun"></i>' : 
-        '<i class="bi bi-moon"></i>';
-    themeToggle.title = currentTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
-    themeToggle.onclick = toggleTheme;
-    
-    headerActions.appendChild(themeToggle);
-}
-
-function toggleTheme() {
-    currentTheme = currentTheme === 'light' ? 'dark' : 'light';
-    localStorage.setItem('theme', currentTheme);
-    applyTheme(currentTheme);
-    
-    const themeToggle = document.querySelector('.theme-toggle');
-    if (themeToggle) {
-        themeToggle.innerHTML = currentTheme === 'dark' ? 
-            '<i class="bi bi-sun"></i>' : 
-            '<i class="bi bi-moon"></i>';
-        themeToggle.title = currentTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode';
-    }
-}
-
-function applyTheme(theme) {
-    document.documentElement.setAttribute('data-theme', theme);
-    document.body.classList.toggle('dark-mode', theme === 'dark');
-    
-    // Update theme-specific styles
-    updateThemeStyles(theme);
-}
-
-function updateThemeStyles(theme) {
-    // Remove existing theme style
-    const existingStyle = document.getElementById('theme-styles');
-    if (existingStyle) existingStyle.remove();
-    
-    const style = document.createElement('style');
-    style.id = 'theme-styles';
-    
-    if (theme === 'dark') {
-        style.textContent = `
-            :root {
-                --bg-primary: #1a1a1a;
-                --bg-secondary: #2d2d2d;
-                --bg-card: #2d2d2d;
-                --text-primary: #ffffff;
-                --text-secondary: #b0b0b0;
-                --border-color: #404040;
-                --shadow-color: rgba(0, 0, 0, 0.3);
-                --hover-bg: #3d3d3d;
-            }
-            
-            .card, .dashboard-crop-card, .plant-card {
-                background: var(--bg-card);
-                border: 1px solid var(--border-color);
-            }
-            
-            .btn-outline {
-                border-color: var(--border-color);
-                color: var(--text-primary);
-            }
-            
-            .btn-outline:hover {
-                background: var(--hover-bg);
-            }
-            
-            .modal {
-                background: var(--bg-card);
-            }
-            
-            input, select, textarea {
-                background: var(--bg-secondary);
-                border-color: var(--border-color);
-                color: var(--text-primary);
-            }
-            
-            .progress-bar {
-                background: var(--bg-secondary);
-            }
-            
-            .nav-item:hover {
-                background: var(--hover-bg);
-            }
-            
-            .task-item {
-                background: var(--bg-secondary);
-                border: 1px solid var(--border-color);
-            }
-        `;
-    } else {
-        style.textContent = `
-            :root {
-                --bg-primary: #ffffff;
-                --bg-secondary: #f8f9fa;
-                --bg-card: #ffffff;
-                --text-primary: #212529;
-                --text-secondary: #6c757d;
-                --border-color: #dee2e6;
-                --shadow-color: rgba(0, 0, 0, 0.1);
-                --hover-bg: #f8f9fa;
-            }
-        `;
-    }
-    
-    document.head.appendChild(style);
-}
-
-// ============================
-// SUPABASE AUTHENTICATION
-// ============================
-
-function initAuthListener() {
-  supabase.auth.onAuthStateChange(async (event, session) => {
-    if (event === 'SIGNED_IN' && session) {
-      console.log('User signed in:', session.user.email);
-      await handleUserLogin(session.user);
-    } else if (event === 'SIGNED_OUT') {
-      console.log('User signed out');
-      handleUserLogout();
-    } else if (event === 'USER_UPDATED') {
-      console.log('User updated');
-      await loadLoggedInUser();
-    }
-  });
-}
-
-async function handleUserLogin(user) {
-  try {
-    await initializeUserProfile(user);
-    await loadLoggedInUser();
-    await syncLocalDataToServer();
-    await loadUserCropsFromSupabase();
-    updateUserDisplay();
-    updateDashboardWithAllCrops();
-    hideLoginModal();
-    showNotification('success', 'Welcome Back!', `Logged in as ${user.email}`);
-  } catch (error) {
-    console.error('Error handling login:', error);
-    showNotification('error', 'Login Error', 'Could not load your data. Please try again.');
-  }
-}
-
-function handleUserLogout() {
-  currentUser = { id: DEMO_USER_ID, username: "Demo User", email: 'demo@smartcrop.com' };
-  userCrops = [];
-  selectedCrop = null;
-  currentPlantingId = null;
-  
-  const savedLocation = localStorage.getItem('userLocation');
-  const savedTheme = localStorage.getItem('theme');
-  localStorage.clear();
-  if (savedLocation) {
-    localStorage.setItem('userLocation', savedLocation);
-  }
-  if (savedTheme) {
-    localStorage.setItem('theme', savedTheme);
-  }
-  
-  updateUserDisplay();
-  updateDashboardWithAllCrops();
-  navigateToPage('home');
-  showNotification('info', 'Logged Out', 'You are now in demo mode.');
-}
-
-async function loginWithEmail(email, password) {
-  try {
-    const { data, error } = await supabase.auth.signInWithPassword({
-      email: email,
-      password: password
-    });
-    
-    if (error) throw error;
-    return { success: true, user: data.user };
-  } catch (error) {
-    console.error('Login error:', error.message);
-    return { success: false, error: error.message };
-  }
-}
-
-async function signUpWithEmail(email, password, username) {
-  try {
-    const { data, error } = await supabase.auth.signUp({
-      email: email,
-      password: password,
-      options: {
-        data: {
-          username: username
-        }
-      }
-    });
-    
-    if (error) throw error;
-    return { success: true, user: data.user };
-  } catch (error) {
-    console.error('Sign up error:', error.message);
-    return { success: false, error: error.message };
-  }
-}
-
-async function signInWithGoogle() {
-  try {
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider: 'google',
-      options: {
-        redirectTo: window.location.origin
-      }
-    });
-    
-    if (error) throw error;
-  } catch (error) {
-    console.error('Google sign in error:', error.message);
-    showNotification('error', 'Google Sign In Failed', error.message);
-  }
-}
-
-// ============================
-// SUPABASE DATABASE OPERATIONS
-// ============================
-
-async function initializeUserProfile(user) {
-  try {
-    const { data: existingProfile, error: checkError } = await supabase
-      .from('user_profiles')
-      .select('*')
-      .eq('id', user.id)
-      .single();
-
-    if (checkError && checkError.code === 'PGRST116') {
-      const { error: insertError } = await supabase
-        .from('user_profiles')
-        .insert({
-          id: user.id,
-          email: user.email,
-          username: user.user_metadata?.username || user.email.split('@')[0],
-          created_at: new Date().toISOString()
-        });
-
-      if (insertError) throw insertError;
-      console.log('New user profile created');
-      await initializeUserSettings(user.id);
-    } else if (checkError) {
-      throw checkError;
-    }
-    
-    return true;
-  } catch (error) {
-    console.error('Error initializing user profile:', error);
-    throw error;
-  }
-}
-
-async function initializeUserSettings(userId) {
-  try {
-    const { data: existingSettings } = await supabase
-      .from('user_settings')
-      .select('*')
-      .eq('user_id', userId)
-      .single();
-
-    if (!existingSettings) {
-      const savedLocation = localStorage.getItem('userLocation');
-      
-      const { error } = await supabase
-        .from('user_settings')
-        .insert({
-          user_id: userId,
-          location: savedLocation ? JSON.parse(savedLocation) : null,
-          units: 'metric',
-          notifications_enabled: true,
-          theme: currentTheme,
-          created_at: new Date().toISOString()
-        });
-
-      if (error) throw error;
-      console.log('User settings initialized');
-    }
-  } catch (error) {
-    console.error('Error initializing user settings:', error);
-  }
-}
-
-async function saveUserCropToSupabase(cropData) {
-  if (!currentUser || currentUser.id === DEMO_USER_ID) return null;
-
-  try {
-    const { data, error } = await supabase
-      .from('user_crops')
-      .insert({
-        user_id: currentUser.id,
-        crop_name: cropData.name,
-        crop_type: cropData.type || cropData.name,
-        planting_date: new Date(cropData.planting_date).toISOString().split('T')[0],
-        status: 'growing',
-        duration_days: cropData.duration,
-        created_at: new Date().toISOString()
-      })
-      .select()
-      .single();
-
-    if (error) throw error;
-    
-    console.log('Crop saved to Supabase:', data);
-    
-    // Immediately save initial progress to cloud
-    await saveCropProgressToSupabase(data.id, {
-      days_elapsed: 0,
-      growth_stage: 'seedling',
-      progress_percentage: 0,
-      notes: 'Crop planted'
-    });
-    
-    return data;
-  } catch (error) {
-    console.error('Error saving crop to Supabase:', error);
-    return null;
-  }
-}
-
-async function saveCropProgressToSupabase(cropId, progressData) {
-  if (!currentUser || currentUser.id === DEMO_USER_ID) return;
-
-  try {
-    const today = new Date().toISOString().split('T')[0];
-    
-    const { data: existingProgress } = await supabase
-      .from('crop_progress')
-      .select('*')
-      .eq('crop_id', cropId)
-      .eq('created_at', today)
-      .single();
-
-    if (existingProgress) {
-      const { error } = await supabase
-        .from('crop_progress')
-        .update({
-          days_elapsed: progressData.days_elapsed,
-          growth_stage: progressData.growth_stage,
-          progress_percentage: progressData.progress_percentage,
-          notes: progressData.notes,
-          updated_at: new Date().toISOString()
-        })
-        .eq('id', existingProgress.id);
-
-      if (error) throw error;
-      console.log('Progress updated in Supabase for crop:', cropId);
-    } else {
-      const { error } = await supabase
-        .from('crop_progress')
-        .insert({
-          crop_id: cropId,
-          days_elapsed: progressData.days_elapsed,
-          growth_stage: progressData.growth_stage,
-          progress_percentage: progressData.progress_percentage,
-          notes: progressData.notes,
-          weather_conditions: currentWeatherData?.current,
-          created_at: today
-        });
-
-      if (error) throw error;
-      console.log('Progress saved to Supabase for crop:', cropId);
-    }
-    
-    // Update local crop data with latest progress
-    const cropIndex = userCrops.findIndex(c => c.planting_id === cropId);
-    if (cropIndex !== -1) {
-      userCrops[cropIndex].last_progress = {
-        days_elapsed: progressData.days_elapsed,
-        growth_stage: progressData.growth_stage,
-        progress_percentage: progressData.progress_percentage,
-        created_at: today
-      };
-    }
-    
-    return true;
-  } catch (error) {
-    console.error('Error saving progress to Supabase:', error);
-    return false;
-  }
-}
-
-async function saveObservationToSupabase(cropId, observationData) {
-  if (!currentUser || currentUser.id === DEMO_USER_ID) return;
-
-  try {
-    const { error } = await supabase
-      .from('crop_observations')
-      .insert({
-        crop_id: cropId,
-        observation_type: observationData.type || 'manual',
-        pest_level: observationData.pest_level,
-        disease_type: observationData.disease_type,
-        soil_moisture: observationData.soil_moisture,
-        temperature: observationData.temperature,
-        humidity: observationData.humidity,
-        notes: observationData.notes,
-        image_url: observationData.image_url,
-        created_at: new Date().toISOString()
-      });
-
-    if (error) throw error;
-    
-    console.log('Observation saved to Supabase');
-    return true;
-  } catch (error) {
-    console.error('Error saving observation to Supabase:', error);
-    return false;
-  }
-}
-
-async function loadUserCropsFromSupabase() {
-  if (!currentUser || currentUser.id === DEMO_USER_ID) return;
-
-  try {
-    const { data: cropsData, error: cropsError } = await supabase
-      .from('user_crops')
-      .select('*')
-      .eq('user_id', currentUser.id)
-      .eq('status', 'growing')
-      .order('created_at', { ascending: false });
-
-    if (cropsError) throw cropsError;
-
-    if (cropsData && cropsData.length > 0) {
-      userCrops = cropsData.map(crop => ({
-        planting_id: crop.id,
-        crop_type: crop.crop_name,
-        crop_data: crops.find(c => c.name === crop.crop_name),
-        planting_date: crop.planting_date,
-        user_id: crop.user_id,
-        created_at: crop.created_at,
-        status: crop.status,
-        duration: crop.duration_days
-      }));
-
-      // Load latest progress for each crop
-      for (let crop of userCrops) {
-        const { data: progressData } = await supabase
-          .from('crop_progress')
-          .select('*')
-          .eq('crop_id', crop.planting_id)
-          .order('created_at', { ascending: false })
-          .limit(1)
-          .single();
-
-        if (progressData) {
-          crop.last_progress = progressData;
-        }
-      }
-
-      console.log('Loaded', userCrops.length, 'crops from Supabase with progress');
-    } else {
-      userCrops = [];
-    }
-  } catch (error) {
-    console.error('Error loading crops from Supabase:', error);
-    await loadAllUserCropsFromLocal();
-  }
-}
-
-async function syncLocalDataToServer() {
-  if (!currentUser || currentUser.id === DEMO_USER_ID) return;
-
-  try {
-    const localCrops = JSON.parse(localStorage.getItem('userCrops') || '[]');
-    if (localCrops.length > 0) {
-      for (const localCrop of localCrops) {
-        const { data: existingCrop } = await supabase
-          .from('user_crops')
-          .select('*')
-          .eq('user_id', currentUser.id)
-          .eq('crop_name', localCrop.crop_type)
-          .eq('planting_date', localCrop.planting_date)
-          .single();
-
-        if (!existingCrop) {
-          await saveUserCropToSupabase({
-            name: localCrop.crop_type,
-            planting_date: localCrop.planting_date,
-            duration: localCrop.crop_data?.duration || 100
-          });
-        }
-      }
-      
-      localStorage.removeItem('userCrops');
-    }
-
-    const localObservations = JSON.parse(localStorage.getItem('cropObservations') || '[]');
-    const localDetections = JSON.parse(localStorage.getItem('detectionLogs') || '[]');
-    
-    if (localObservations.length > 0 || localDetections.length > 0) {
-      showNotification('info', 'Syncing Data', 'Uploading your local data to the cloud...');
-      localStorage.removeItem('cropObservations');
-      localStorage.removeItem('detectionLogs');
-    }
-
-    console.log('Local data synced to Supabase');
-  } catch (error) {
-    console.error('Error syncing data to Supabase:', error);
-  }
-}
-
-// ============================
+// ---------------------
 // INITIALIZATION
-// ============================
+// ---------------------
 document.addEventListener('DOMContentLoaded', function() {
     console.log('✅ Smart Crop System Initialized');
-    
-    // Initialize Supabase client
-    const supabaseUrl = "https://alezsadxhbqozzfxzios.supabase.co";
-    const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsZXpzYWR4aGJxb3p6Znh6aW9zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4OTkyNDMsImV4cCI6MjA4MjQ3NTI0M30.G4fU1jYvZSxuE0fVbAkKe-2WPgBKCe5lwieUyKico0I";
-    
-    window.supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
-    supabase = window.supabase;
-    
     initializeApp();
 });
 
 async function initializeApp() {
     console.log('Initializing app...');
     
-    // Initialize theme
-    initTheme();
-    
-    // Initialize auth listener
-    initAuthListener();
-    createNavOverlay();
-    
-    // Check localStorage for user from signup.js
-    const storedUser = localStorage.getItem('currentUser');
-    if (storedUser) {
-        console.log('Found user in localStorage from signup.js');
-        try {
-            currentUser = JSON.parse(storedUser);
-            console.log('Loaded user:', currentUser);
+    // Initialize Supabase
+    if (window.supabase) {
+        supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+        
+        // Check for existing session
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (session) {
+            console.log('User session found:', session.user.email);
+            currentUser = {
+                id: session.user.id,
+                username: session.user.user_metadata?.username || session.user.email,
+                email: session.user.email
+            };
             
-            // Verify the session is still valid
-            const { data: { user }, error } = await supabase.auth.getUser();
-            if (error || !user) {
-                console.log('Session expired or invalid, trying to restore...');
-                const storedToken = localStorage.getItem('supabase.auth.token');
-                if (storedToken) {
-                    try {
-                        const tokenData = JSON.parse(storedToken);
-                        const { data: sessionData, error: sessionError } = await supabase.auth.setSession({
-                            access_token: tokenData.access_token,
-                            refresh_token: tokenData.refresh_token
-                        });
-                        
-                        if (sessionError) {
-                            console.log('Could not restore session:', sessionError.message);
-                            currentUser = { id: DEMO_USER_ID, username: "Demo User", email: 'demo@smartcrop.com' };
-                        } else {
-                            console.log('Session restored successfully');
-                        }
-                    } catch (tokenError) {
-                        console.log('Token error:', tokenError);
-                        currentUser = { id: DEMO_USER_ID, username: "Demo User", email: 'demo@smartcrop.com' };
-                    }
-                }
-            }
-        } catch (parseError) {
-            console.error('Error parsing stored user:', parseError);
-            currentUser = { id: DEMO_USER_ID, username: "Demo User", email: 'demo@smartcrop.com' };
+            // Load user progress from Supabase
+            await loadUserProgressFromSupabase();
+        } else {
+            // No session, use demo mode
+            currentUser = {
+                id: DEMO_USER_ID,
+                username: 'Demo User',
+                email: 'demo@smartcrop.com'
+            };
+            console.log('Using demo user mode');
         }
     } else {
-        await loadLoggedInUser();
+        // Supabase not available, use demo mode
+        currentUser = {
+            id: DEMO_USER_ID,
+            username: 'Demo User',
+            email: 'demo@smartcrop.com'
+        };
+        console.log('Supabase not available, using demo mode');
     }
     
-    console.log('Final currentUser:', currentUser);
-    
-    // Load crops based on user type
-    await loadAllUserCrops();
-
-    if (currentUser && currentUser.id && currentUser.id !== DEMO_USER_ID) {
-        console.log('Loading crops from Supabase for user:', currentUser.id);
-        await loadUserCropsFromSupabase();
-    }
+    updateUserDisplay();
     
     // Check location
-    const savedLocation = localStorage.getItem('userLocation');
-    if (savedLocation) {
-        try {
-            userLocation = JSON.parse(savedLocation);
-            updateLocationDisplay();
-            fetchWeatherDataFromAPI();
-            hideLocationModal();
-        } catch (error) {
-            showLocationModal();
-        }
-    } else {
-        showLocationModal();
-    }
-
+    await loadUserLocation();
+    
     setupEventListeners();
     initializePlantsGrid();
     
+    // Load models
     await Promise.all([
         loadModel(),
         loadMLModels()
     ]);
     
+    // Initialize navigation state
     initializeNavigation();
-    initializeQuickActions();
-    hideLoginModal();
     
-    // Show welcome message if user just signed up
-    const justSignedUp = localStorage.getItem('justSignedUp');
-    if (justSignedUp === 'true' && currentUser.id !== DEMO_USER_ID) {
-        showNotification('success', 'Welcome!', `Hello ${currentUser.username}! Start planting your first crop.`);
-        localStorage.removeItem('justSignedUp');
-    }
+    // Initialize quick actions
+    initializeQuickActions();
     
     console.log('App initialization complete');
 }
 
-async function loadLoggedInUser() {
-  try {
-    const { data: { user }, error } = await supabase.auth.getUser();
-    
-    if (error) {
-      console.log('Supabase auth error:', error.message);
-      const storedUser = localStorage.getItem('currentUser');
-      if (storedUser) {
-        currentUser = JSON.parse(storedUser);
-        console.log('Using localStorage user as fallback:', currentUser);
-      } else {
-        currentUser = { id: DEMO_USER_ID, username: "Demo User", email: 'demo@smartcrop.com' };
-      }
-    } else if (user) {
-      currentUser = {
-        id: user.id,
-        email: user.email,
-        username: user.user_metadata?.username || user.email.split("@")[0]
-      };
-      
-      localStorage.setItem('currentUser', JSON.stringify(currentUser));
-      
-      await initializeUserProfile(user);
-      
-      console.log('Loaded user from Supabase auth:', currentUser);
-    } else {
-      currentUser = { id: DEMO_USER_ID, username: "Demo User", email: 'demo@smartcrop.com' };
-    }
-
-    updateUserDisplay();
-  } catch (error) {
-    console.error('Error loading user:', error);
-    currentUser = { id: DEMO_USER_ID, username: "Demo User", email: 'demo@smartcrop.com' };
-    updateUserDisplay();
-  }
-}
-
-// ============================
-// CROP MANAGEMENT
-// ============================
-
-async function loadAllUserCrops() {
-  try {
-    if (currentUser && currentUser.id !== DEMO_USER_ID) {
-      return;
-    }
-    
-    const savedCrops = localStorage.getItem('userCrops');
-    if (savedCrops) {
-      userCrops = JSON.parse(savedCrops);
-      updateDashboardWithAllCrops();
-    }
-    
-  } catch (error) {
-    console.error('Error loading crops:', error);
-    const savedCrops = localStorage.getItem('userCrops');
-    if (savedCrops) {
-      userCrops = JSON.parse(savedCrops);
-      updateDashboardWithAllCrops();
-    }
-  }
-}
-
-async function loadAllUserCropsFromLocal() {
-  const savedCrops = localStorage.getItem('userCrops');
-  if (savedCrops) {
-    userCrops = JSON.parse(savedCrops);
-    updateDashboardWithAllCrops();
-  }
-}
-
-async function confirmPlanting(cropName) {
-  const crop = crops.find(c => c.name === cropName);
-  if (!crop) return;
-  
-  const plantingDate = document.getElementById('plantingDateInput').value;
-  
-  try {
-    const userId = currentUser ? currentUser.id : DEMO_USER_ID;
-    
-    if (currentUser.id !== DEMO_USER_ID) {
-      const supabaseCrop = await saveUserCropToSupabase({
-        name: crop.name,
-        planting_date: plantingDate,
-        duration: crop.duration
-      });
-      
-      if (supabaseCrop) {
-        const newCrop = {
-          planting_id: supabaseCrop.id,
-          crop_type: crop.name,
-          crop_data: crop,
-          planting_date: plantingDate,
-          user_id: userId,
-          created_at: new Date().toISOString(),
-          status: 'growing'
-        };
-        
-        userCrops.push(newCrop);
-        
-        document.querySelector('.modal-overlay').remove();
-        updateDashboardWithAllCrops();
-        navigateToPage('home');
-        
-        showNotification('success', `${crop.name} Planted!`, 
-                      `Planted on ${new Date(plantingDate).toLocaleDateString()}. Progress saved to cloud.`);
-        return;
-      }
-    }
-    
-    simulateCropPlanting(crop, plantingDate);
-    
-  } catch (error) {
-    console.error('Error planting crop:', error);
-    simulateCropPlanting(crop, plantingDate);
-  }
-}
-
-function simulateCropPlanting(crop, plantingDate = new Date().toISOString().split('T')[0]) {
-  const plantingId = Date.now();
-  
-  const newCrop = {
-    planting_id: plantingId,
-    crop_type: crop.name,
-    crop_data: crop,
-    planting_date: plantingDate,
-    user_id: DEMO_USER_ID,
-    created_at: new Date().toISOString(),
-    status: 'growing'
-  };
-  
-  userCrops.push(newCrop);
-  localStorage.setItem('userCrops', JSON.stringify(userCrops));
-  
-  const modal = document.querySelector('.modal-overlay');
-  if (modal) modal.remove();
-  
-  updateDashboardWithAllCrops();
-  navigateToPage('home');
-  
-  showNotification('success', `${crop.name} Planted!`, 
-                 `Planted on ${new Date(plantingDate).toLocaleDateString()}. Working in offline mode.`);
-}
-
-async function updateProgress() {
-  if (!currentPlantingId || !selectedCrop) return;
-  
-  const plantingDate = new Date(selectedCrop.planting_date);
-  const now = new Date();
-  const daysElapsed = Math.floor((now - plantingDate) / (1000 * 60 * 60 * 24));
-  
-  const cropData = crops.find(c => c.name === selectedCrop.crop_type) || {
-    name: selectedCrop.crop_type,
-    duration: 100
-  };
-  const totalDays = cropData.duration;
-  const progressPercentage = Math.min(99.9, (daysElapsed / totalDays) * 100);
-  
-  let growthStage = 'seedling';
-  if (daysElapsed < 15) growthStage = 'seedling';
-  else if (daysElapsed < 50) growthStage = 'vegetative';
-  else if (daysElapsed < 90) growthStage = 'flowering';
-  else growthStage = 'mature';
-  
-  // Always try to save to Supabase if user is logged in
-  let cloudSaved = false;
-  if (currentUser && currentUser.id !== DEMO_USER_ID && selectedCrop.planting_id) {
-    cloudSaved = await saveCropProgressToSupabase(selectedCrop.planting_id, {
-      days_elapsed: daysElapsed,
-      growth_stage: growthStage,
-      progress_percentage: progressPercentage,
-      notes: `Day ${daysElapsed}: ${growthStage} stage`
-    });
-  }
-  
-  // Update UI
-  const progressFill = document.querySelector('.progress-fill');
-  const progressText = document.querySelector('.progress-text');
-  if (progressFill && progressText) {
-    progressFill.style.width = `${progressPercentage}%`;
-    progressText.textContent = `${progressPercentage.toFixed(1)}% Complete`;
-    
-    if (cloudSaved) {
-      progressText.innerHTML += ` <span class="cloud-sync-badge"><i class="bi bi-cloud-check"></i> Synced</span>`;
-    }
-    
-    if (progressPercentage > 0) {
-      progressFill.classList.add('progress-animate');
-      setTimeout(() => {
-        progressFill.classList.remove('progress-animate');
-      }, 500);
-    }
-  }
-  
-  const tasks = await getTasksFromDecisionTree(cropData, daysElapsed, growthStage);
-  await updateTasksWithAI(tasks || [], growthStage, progressPercentage);
-  checkMilestones(daysElapsed, growthStage);
-}
-
-async function removeCrop(plantingId) {
-  if (confirm('Are you sure you want to remove this crop? This will delete all associated data.')) {
-    if (currentUser && currentUser.id !== DEMO_USER_ID) {
-      try {
-        await supabase
-          .from('user_crops')
-          .update({ status: 'removed', updated_at: new Date().toISOString() })
-          .eq('id', plantingId)
-          .eq('user_id', currentUser.id);
-        
-        console.log('Crop marked as removed in Supabase:', plantingId);
-      } catch (error) {
-        console.error('Error removing crop from Supabase:', error);
-      }
-    }
-    
-    userCrops = userCrops.filter(crop => crop.planting_id !== plantingId);
-    
-    if (selectedCrop && selectedCrop.planting_id === plantingId) {
-      selectedCrop = null;
-      currentPlantingId = null;
-    }
-    
-    localStorage.setItem('userCrops', JSON.stringify(userCrops));
-    updateDashboardWithAllCrops();
-    showNotification('info', 'Crop Removed', 'Crop has been removed from your dashboard.');
-  }
-}
-
-// ============================
-// IMPROVED DASHBOARD UI
-// ============================
-
-async function updateDashboardWithAllCrops() {
-    const currentCropElement = document.getElementById('currentCrop');
-    if (!currentCropElement) return;
-    
-    if (userCrops.length === 0) {
-        currentCropElement.innerHTML = `
-            <div class="empty-state">
-                <div class="empty-state-icon">
-                    <i class="bi bi-flower1"></i>
-                </div>
-                <h4>No Crops Planted Yet</h4>
-                <p>Start your farming journey by planting your first crop</p>
-                <button class="btn btn-primary" onclick="navigateToPage('plants')">
-                    <i class="bi bi-plus-circle"></i> Plant First Crop
-                </button>
-            </div>
-        `;
-        return;
-    }
-    
-    let html = `
-        <div class="dashboard-header">
-            <div class="dashboard-title">
-                <h3><i class="bi bi-grid-3x3-gap"></i> My Crops</h3>
-                <span class="badge">${userCrops.length} Active</span>
-            </div>
-            <div class="dashboard-actions">
-                <button class="btn btn-sm btn-primary" onclick="navigateToPage('plants')">
-                    <i class="bi bi-plus-lg"></i> Add Crop
-                </button>
-            </div>
-        </div>
-        <div class="crops-grid compact">
-    `;
-    
-    for (const crop of userCrops) {
-        const cropData = crops.find(c => c.name === crop.crop_type) || {
-            name: crop.crop_type,
-            icon: 'bi-flower1',
-            season: 'Various',
-            duration: 100
-        };
-        
-        const plantingDate = new Date(crop.planting_date);
-        const harvestDate = new Date(plantingDate);
-        harvestDate.setDate(harvestDate.getDate() + cropData.duration);
-        
-        const now = new Date();
-        const totalDays = cropData.duration;
-        const daysElapsed = Math.floor((now - plantingDate) / (1000 * 60 * 60 * 24));
-        const progressPercentage = Math.min(100, Math.max(0, (daysElapsed / totalDays) * 100));
-        
-        let growthStage = 'seedling';
-        if (daysElapsed < 15) growthStage = 'seedling';
-        else if (daysElapsed < 50) growthStage = 'vegetative';
-        else if (daysElapsed < 90) growthStage = 'flowering';
-        else growthStage = 'mature';
-        
-        const isSelected = selectedCrop && selectedCrop.planting_id === crop.planting_id;
-        const daysRemaining = Math.max(0, totalDays - daysElapsed);
-        
-        // Cloud sync indicator
-        const cloudIcon = crop.user_id === DEMO_USER_ID ? 
-            '<i class="bi bi-device-hdd" title="Local storage"></i>' : 
-            '<i class="bi bi-cloud-check" title="Cloud synced"></i>';
-        
-        html += `
-            <div class="dashboard-crop-card ${isSelected ? 'selected' : ''}" 
-                 onclick="selectCropForDetail(${crop.planting_id})">
-                <div class="crop-card-header">
-                    <div class="crop-icon">
-                        <i class="bi ${cropData.icon}"></i>
-                    </div>
-                    <div class="crop-info">
-                        <h4>${cropData.name}</h4>
-                        <div class="crop-meta">
-                            <span class="crop-age">${daysElapsed}d old</span>
-                            <span class="crop-stage ${growthStage}">${growthStage}</span>
-                        </div>
-                    </div>
-                    <div class="cloud-indicator">
-                        ${cloudIcon}
-                    </div>
-                </div>
-                
-                <div class="crop-progress-compact">
-                    <div class="progress-header">
-                        <span class="progress-label">Progress</span>
-                        <span class="progress-percent">${progressPercentage.toFixed(0)}%</span>
-                    </div>
-                    <div class="progress-bar-compact">
-                        <div class="progress-fill-compact" style="width: ${progressPercentage}%"></div>
-                    </div>
-                </div>
-                
-                <div class="crop-stats">
-                    <div class="stat">
-                        <i class="bi bi-calendar"></i>
-                        <span>Planted: ${plantingDate.getDate()}/${plantingDate.getMonth()+1}</span>
-                    </div>
-                    <div class="stat">
-                        <i class="bi bi-clock"></i>
-                        <span>${daysRemaining}d left</span>
-                    </div>
-                </div>
-                
-                <div class="crop-actions-mini">
-                    <button class="btn-icon" onclick="viewCropDetails(${crop.planting_id}); event.stopPropagation()" title="View Details">
-                        <i class="bi bi-eye"></i>
-                    </button>
-                    <button class="btn-icon" onclick="removeCrop(${crop.planting_id}); event.stopPropagation()" title="Remove Crop">
-                        <i class="bi bi-trash"></i>
-                    </button>
-                </div>
-            </div>
-        `;
-    }
-    
-    html += `</div>`;
-    currentCropElement.innerHTML = html;
-    
-    // Update weather impact if available
-    if (currentWeatherData && currentWeatherData.current) {
-        updateWeatherImpact(currentWeatherData.current);
-    }
-}
-
-async function showCropDetailView(crop) {
-    const cropData = crops.find(c => c.name === crop.crop_type) || {
-        name: crop.crop_type,
-        icon: 'bi-flower1',
-        season: 'Various',
-        duration: 100
-    };
-    
-    const plantingDate = new Date(crop.planting_date);
-    const harvestDate = new Date(plantingDate);
-    harvestDate.setDate(harvestDate.getDate() + cropData.duration);
-    
-    const now = new Date();
-    const daysElapsed = Math.floor((now - plantingDate) / (1000 * 60 * 60 * 24));
-    const daysRemaining = Math.max(0, cropData.duration - daysElapsed);
-    const progressPercentage = Math.min(100, Math.max(0, (daysElapsed / cropData.duration) * 100));
-    
-    let growthStage = 'seedling';
-    if (daysElapsed < 15) growthStage = 'seedling';
-    else if (daysElapsed < 50) growthStage = 'vegetative';
-    else if (daysElapsed < 90) growthStage = 'flowering';
-    else growthStage = 'mature';
-    
-    const tasks = await getTasksFromDecisionTree(cropData, daysElapsed, growthStage);
-    
-    const detailView = `
-        <div class="crop-detail-view">
-            <div class="detail-header">
-                <button class="btn btn-sm btn-outline" onclick="showAllCrops()">
-                    <i class="bi bi-arrow-left"></i> Back
-                </button>
-                <div class="detail-title">
-                    <i class="bi ${cropData.icon}"></i>
-                    <h3>${cropData.name}</h3>
-                    ${crop.user_id !== DEMO_USER_ID ? 
-                      '<span class="cloud-badge"><i class="bi bi-cloud-check"></i> Cloud Synced</span>' : 
-                      '<span class="cloud-badge local"><i class="bi bi-device-hdd"></i> Local Only</span>'}
-                </div>
-            </div>
-            
-            <div class="detail-content">
-                <div class="progress-section-large">
-                    <div class="progress-header-large">
-                        <h4>Growth Progress</h4>
-                        <span class="progress-percent-large">${progressPercentage.toFixed(1)}%</span>
-                    </div>
-                    <div class="progress-bar-large">
-                        <div class="progress-fill-large" style="width: ${progressPercentage}%"></div>
-                    </div>
-                    <div class="progress-stats">
-                        <div class="progress-stat">
-                            <div class="stat-value">${daysElapsed}</div>
-                            <div class="stat-label">Days Elapsed</div>
-                        </div>
-                        <div class="progress-stat">
-                            <div class="stat-value">${daysRemaining}</div>
-                            <div class="stat-label">Days Remaining</div>
-                        </div>
-                        <div class="progress-stat">
-                            <div class="stat-value">${cropData.duration}</div>
-                            <div class="stat-label">Total Days</div>
-                        </div>
-                        <div class="progress-stat">
-                            <div class="stat-value stage-${growthStage}">${growthStage}</div>
-                            <div class="stat-label">Growth Stage</div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="detail-timeline">
-                    <h4><i class="bi bi-calendar-event"></i> Timeline</h4>
-                    <div class="timeline-compact">
-                        <div class="timeline-item">
-                            <div class="timeline-date">${plantingDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
-                            <div class="timeline-content">
-                                <strong>Planted</strong>
-                                <p>Crop planting initiated</p>
-                            </div>
-                        </div>
-                        <div class="timeline-item future">
-                            <div class="timeline-date">${harvestDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</div>
-                            <div class="timeline-content">
-                                <strong>Expected Harvest</strong>
-                                <p>Target completion date</p>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                
-                <div class="detail-tasks">
-                    <div class="tasks-header">
-                        <h4><i class="bi bi-clipboard-check"></i> Today's Tasks</h4>
-                        <span class="model-badge">AI Recommended</span>
-                    </div>
-                    <div id="todaysTasksDetail" class="tasks-list"></div>
-                </div>
-            </div>
-        </div>
-    `;
-    
-    const currentCropElement = document.getElementById('currentCrop');
-    if (currentCropElement) {
-        currentCropElement.innerHTML = detailView;
-        updateTasksForDetail(tasks);
-        
-        // Save progress to cloud if logged in
-        if (currentUser && currentUser.id !== DEMO_USER_ID && crop.planting_id) {
-            await saveCropProgressToSupabase(crop.planting_id, {
-                days_elapsed: daysElapsed,
-                growth_stage: growthStage,
-                progress_percentage: progressPercentage,
-                notes: `Viewed crop details`
-            });
-        }
-    }
-}
-
-function updateTasksForDetail(tasks) {
-    const tasksContainer = document.getElementById('todaysTasksDetail');
-    if (!tasksContainer) return;
-    
-    if (!tasks || tasks.length === 0) {
-        tasksContainer.innerHTML = `
-            <div class="info-note">
-                <i class="bi bi-info-circle"></i>
-                <span>No specific tasks for today. Continue regular monitoring.</span>
-            </div>
-        `;
-        return;
-    }
-    
-    tasksContainer.innerHTML = '';
-    tasks.forEach(task => {
-        const taskItem = document.createElement('div');
-        taskItem.className = `task-item ${task.priority || 'medium'}`;
-        
-        let modelBadge = '';
-        if (task.model) {
-            modelBadge = `<span class="model-badge-small">${task.model}</span>`;
-        }
-        
-        taskItem.innerHTML = `
-            <i class="bi ${task.icon || 'bi-check-circle'}"></i>
-            <div class="task-content">
-                <div class="task-title">${task.task}</div>
-                <div class="task-description">${task.description}</div>
-                ${modelBadge}
-            </div>
-            <i class="bi bi-check-circle task-check"></i>
-        `;
-        
-        taskItem.addEventListener('click', function() {
-            this.classList.toggle('completed');
-        });
-        
-        tasksContainer.appendChild(taskItem);
-    });
-}
-
-async function updateTasksWithAI(tasks, growthStage, progress) {
-    const tasksList = document.getElementById('todaysTasks');
-    if (!tasksList) return;
-    
-    if (!tasks || tasks.length === 0) {
-        tasks = getDefaultTasks(
-            crops.find(c => c.name === selectedCrop.crop_type),
-            Math.floor((new Date() - new Date(selectedCrop.planting_date)) / (1000 * 60 * 60 * 24)),
-            growthStage
-        );
-    }
-    
-    tasksList.innerHTML = '';
-    tasks.forEach(task => {
-        const taskItem = document.createElement('div');
-        taskItem.className = `task-item ${task.priority || 'medium'}`;
-        
-        let modelBadge = '';
-        if (task.model) {
-            modelBadge = `<span class="model-badge-small">${task.model}</span>`;
-        }
-        
-        taskItem.innerHTML = `
-            <i class="bi ${task.icon || 'bi-check-circle'}"></i>
-            <div class="task-content">
-                <div class="task-title">${task.task}</div>
-                <div class="task-description">${task.description}</div>
-                ${modelBadge}
-            </div>
-            <i class="bi bi-check-circle task-check"></i>
-        `;
-        
-        taskItem.addEventListener('click', function() {
-            this.classList.toggle('completed');
-        });
-        
-        tasksList.appendChild(taskItem);
-    });
-}
-
-function showAllCrops() {
-    selectedCrop = null;
-    currentPlantingId = null;
-    updateDashboardWithAllCrops();
-    updateWeatherImpact(currentWeatherData ? currentWeatherData.current : null);
-}
-
-function viewCropDetails(plantingId) {
-    selectCropForDetail(plantingId);
-}
-
-// ============================
-// UI FUNCTIONS
-// ============================
-
-function updateUserDisplay() {
-  const usernameDisplay = document.getElementById('usernameDisplay');
-  if (usernameDisplay) {
-    usernameDisplay.textContent = currentUser ? currentUser.username : 'Demo User';
-  }
-  
-  const logoutBtn = document.getElementById('logoutBtn');
-  const loginBtn = document.getElementById('loginBtn');
-  
-  if (logoutBtn) {
-    logoutBtn.style.display = currentUser.id !== DEMO_USER_ID ? 'flex' : 'none';
-  }
-  if (loginBtn) {
-    loginBtn.style.display = currentUser.id === DEMO_USER_ID ? 'block' : 'none';
-  }
-}
-
-function showLoginModal() {
-  const loginModal = document.getElementById('loginModal');
-  if (loginModal) {
-    loginModal.style.display = 'flex';
-    const errorMsg = loginModal.querySelector('.login-error');
-    if (errorMsg) errorMsg.style.display = 'none';
-  }
-}
-
-function hideLoginModal() {
-  const loginModal = document.getElementById('loginModal');
-  if (loginModal) loginModal.style.display = 'none';
-}
-
-// ============================
-// LOGIN/LOGOUT HANDLERS
-// ============================
-
-async function handleEmailLogin() {
-  const email = document.getElementById('loginEmail').value;
-  const password = document.getElementById('loginPassword').value;
-  const errorMsg = document.querySelector('.login-error');
-  
-  if (!email || !password) {
-    if (errorMsg) {
-      errorMsg.textContent = 'Please enter email and password';
-      errorMsg.style.display = 'block';
-    }
-    return;
-  }
-  
-  const submitBtn = document.querySelector('#loginModal .btn-primary');
-  const originalText = submitBtn.textContent;
-  submitBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Logging in...';
-  submitBtn.disabled = true;
-  
-  const result = await loginWithEmail(email, password);
-  
-  if (result.success) {
-    hideLoginModal();
-    showNotification('success', 'Login Successful', 'Welcome back!');
-  } else {
-    if (errorMsg) {
-      errorMsg.textContent = result.error || 'Login failed. Please try again.';
-      errorMsg.style.display = 'block';
-    }
-    
-    submitBtn.textContent = originalText;
-    submitBtn.disabled = false;
-  }
-}
-
-async function handleEmailSignup() {
-  const email = document.getElementById('signupEmail').value;
-  const password = document.getElementById('signupPassword').value;
-  const username = document.getElementById('signupUsername').value;
-  const errorMsg = document.querySelector('.signup-error');
-  
-  if (!email || !password || !username) {
-    if (errorMsg) {
-      errorMsg.textContent = 'Please fill all fields';
-      errorMsg.style.display = 'block';
-    }
-    return;
-  }
-  
-  if (password.length < 6) {
-    if (errorMsg) {
-      errorMsg.textContent = 'Password must be at least 6 characters';
-      errorMsg.style.display = 'block';
-    }
-    return;
-  }
-  
-  const submitBtn = document.querySelector('#signupModal .btn-primary');
-  const originalText = submitBtn.textContent;
-  submitBtn.innerHTML = '<i class="bi bi-hourglass-split"></i> Creating account...';
-  submitBtn.disabled = true;
-  
-  const result = await signUpWithEmail(email, password, username);
-  
-  if (result.success) {
-    hideSignupModal();
-    showNotification('success', 'Account Created!', 'Please check your email to confirm your account.');
-  } else {
-    if (errorMsg) {
-      errorMsg.textContent = result.error || 'Sign up failed. Please try again.';
-      errorMsg.style.display = 'block';
-    }
-    
-    submitBtn.textContent = originalText;
-    submitBtn.disabled = false;
-  }
-}
-
-function showSignupModal() {
-  hideLoginModal();
-  const signupModal = document.getElementById('signupModal');
-  if (signupModal) {
-    signupModal.style.display = 'flex';
-  }
-}
-
-function hideSignupModal() {
-  const signupModal = document.getElementById('signupModal');
-  if (signupModal) signupModal.style.display = 'none';
-}
-
-function handleLogout() {
-  supabase.auth.signOut();
-}
-
-// ============================
-// ML MODEL FUNCTIONS
-// ============================
-
+// ---------------------
+// LOAD ML MODELS
+// ---------------------
 async function loadMLModels() {
     console.log('Loading ML models...');
     
     try {
         console.log('ML models will be loaded via API endpoints');
         await testMLModelEndpoints();
-        
     } catch (error) {
         console.error('Error initializing ML models:', error);
         console.log('ML models will be used via API calls');
@@ -1463,10 +193,341 @@ async function testMLModelEndpoints() {
     }
 }
 
-// ============================
-// FERTILIZER RECOMMENDATION
-// ============================
+// ---------------------
+// AUTHENTICATION FUNCTIONS
+// ---------------------
+async function loginUser(email, password) {
+    try {
+        if (!supabase) {
+            showNotification('error', 'Login Error', 'Authentication service not available');
+            return false;
+        }
+        
+        const { data, error } = await supabase.auth.signInWithPassword({
+            email: email,
+            password: password
+        });
+        
+        if (error) {
+            showNotification('error', 'Login Failed', error.message);
+            return false;
+        }
+        
+        if (data.user) {
+            currentUser = {
+                id: data.user.id,
+                username: data.user.user_metadata?.username || data.user.email,
+                email: data.user.email
+            };
+            
+            // Save user to localStorage for persistence
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            
+            // Migrate demo data to user account
+            await migrateDemoDataToUser();
+            
+            // Load user progress from Supabase
+            await loadUserProgressFromSupabase();
+            
+            updateUserDisplay();
+            showNotification('success', 'Login Successful', `Welcome back, ${currentUser.username}!`);
+            return true;
+        }
+    } catch (error) {
+        console.error('Login error:', error);
+        showNotification('error', 'Login Error', 'An unexpected error occurred');
+    }
+    
+    return false;
+}
 
+async function signupUser(name, email, password) {
+    try {
+        if (!supabase) {
+            showNotification('error', 'Signup Error', 'Authentication service not available');
+            return false;
+        }
+        
+        const { data, error } = await supabase.auth.signUp({
+            email: email,
+            password: password,
+            options: {
+                data: {
+                    username: name
+                }
+            }
+        });
+        
+        if (error) {
+            showNotification('error', 'Signup Failed', error.message);
+            return false;
+        }
+        
+        if (data.user) {
+            currentUser = {
+                id: data.user.id,
+                username: name,
+                email: data.user.email
+            };
+            
+            // Save user to localStorage
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            
+            // Create user progress record in Supabase
+            await createUserProgressRecord();
+            
+            updateUserDisplay();
+            showNotification('success', 'Signup Successful', `Welcome ${name}!`);
+            return true;
+        }
+    } catch (error) {
+        console.error('Signup error:', error);
+        showNotification('error', 'Signup Error', 'An unexpected error occurred');
+    }
+    
+    return false;
+}
+
+async function logoutUser() {
+    try {
+        // Save current progress before logging out
+        await saveUserProgressToSupabase();
+        
+        // Sign out from Supabase
+        if (supabase) {
+            await supabase.auth.signOut();
+        }
+        
+        // Clear user data
+        currentUser = null;
+        currentPlantingId = null;
+        userCrops = [];
+        localStorage.removeItem('currentUser');
+        
+        // Redirect to landing page
+        window.location.href = 'index.html';
+        
+    } catch (error) {
+        console.error('Logout error:', error);
+        showNotification('error', 'Logout Failed', 'An error occurred during logout');
+    }
+}
+
+// ---------------------
+// USER PROGRESS MANAGEMENT
+// ---------------------
+async function createUserProgressRecord() {
+    if (!supabase || !currentUser || currentUser.id === DEMO_USER_ID) return;
+    
+    try {
+        const { error } = await supabase
+            .from('user_progress')
+            .upsert({
+                user_id: currentUser.id,
+                progress_data: {
+                    userCrops: [],
+                    location: null,
+                    detections: [],
+                    observations: [],
+                    created_at: new Date().toISOString()
+                },
+                updated_at: new Date().toISOString()
+            }, {
+                onConflict: 'user_id'
+            });
+        
+        if (error) {
+            console.error('Error creating user progress record:', error);
+        }
+    } catch (error) {
+        console.error('Error creating progress record:', error);
+    }
+}
+
+async function loadUserProgressFromSupabase() {
+    if (!supabase || !currentUser || currentUser.id === DEMO_USER_ID) return;
+    
+    try {
+        const { data, error } = await supabase
+            .from('user_progress')
+            .select('progress_data')
+            .eq('user_id', currentUser.id)
+            .single();
+        
+        if (!error && data && data.progress_data) {
+            // Load crops
+            if (data.progress_data.userCrops) {
+                userCrops = data.progress_data.userCrops;
+            }
+            
+            // Load location
+            if (data.progress_data.location) {
+                userLocation = data.progress_data.location;
+                updateLocationDisplay();
+                fetchWeatherDataFromAPI();
+                hideLocationModal();
+            } else {
+                showLocationModal();
+            }
+            
+            // Update dashboard
+            updateDashboardWithAllCrops();
+            console.log('User progress loaded from Supabase');
+        } else {
+            // No progress found, load from localStorage as fallback
+            await loadUserProgressFromLocalStorage();
+        }
+    } catch (error) {
+        console.error('Error loading user progress:', error);
+        await loadUserProgressFromLocalStorage();
+    }
+}
+
+async function saveUserProgressToSupabase() {
+    if (!supabase || !currentUser || currentUser.id === DEMO_USER_ID) return;
+    
+    try {
+        const progressData = {
+            userCrops: userCrops,
+            location: userLocation,
+            detections: JSON.parse(localStorage.getItem('cropDetections') || '[]'),
+            observations: JSON.parse(localStorage.getItem('cropObservations') || '[]'),
+            task_completions: JSON.parse(localStorage.getItem('taskCompletions') || '{}'),
+            updated_at: new Date().toISOString()
+        };
+        
+        const { error } = await supabase
+            .from('user_progress')
+            .upsert({
+                user_id: currentUser.id,
+                progress_data: progressData,
+                updated_at: new Date().toISOString()
+            }, {
+                onConflict: 'user_id'
+            });
+        
+        if (error) {
+            console.error('Error saving user progress:', error);
+            // Fallback to localStorage
+            await saveUserProgressToLocalStorage();
+        } else {
+            console.log('User progress saved to Supabase');
+        }
+    } catch (error) {
+        console.error('Error saving progress:', error);
+        await saveUserProgressToLocalStorage();
+    }
+}
+
+async function loadUserProgressFromLocalStorage() {
+    // Load crops
+    const savedCrops = localStorage.getItem('userCrops');
+    if (savedCrops) {
+        userCrops = JSON.parse(savedCrops);
+    }
+    
+    // Load location
+    const savedLocation = localStorage.getItem('userLocation');
+    if (savedLocation) {
+        userLocation = JSON.parse(savedLocation);
+        updateLocationDisplay();
+        fetchWeatherDataFromAPI();
+        hideLocationModal();
+    } else {
+        showLocationModal();
+    }
+    
+    updateDashboardWithAllCrops();
+    console.log('User progress loaded from localStorage');
+}
+
+async function saveUserProgressToLocalStorage() {
+    localStorage.setItem('userCrops', JSON.stringify(userCrops));
+    if (userLocation) {
+        localStorage.setItem('userLocation', JSON.stringify(userLocation));
+    }
+}
+
+async function migrateDemoDataToUser() {
+    if (!supabase || !currentUser || currentUser.id === DEMO_USER_ID) return;
+    
+    // Get demo data from localStorage
+    const demoCrops = localStorage.getItem('userCrops');
+    const demoLocation = localStorage.getItem('userLocation');
+    const demoDetections = localStorage.getItem('cropDetections');
+    const demoObservations = localStorage.getItem('cropObservations');
+    
+    if (demoCrops || demoLocation || demoDetections || demoObservations) {
+        try {
+            const progressData = {
+                userCrops: demoCrops ? JSON.parse(demoCrops) : [],
+                location: demoLocation ? JSON.parse(demoLocation) : null,
+                detections: demoDetections ? JSON.parse(demoDetections) : [],
+                observations: demoObservations ? JSON.parse(demoObservations) : [],
+                migrated_at: new Date().toISOString()
+            };
+            
+            // Save to Supabase
+            const { error } = await supabase
+                .from('user_progress')
+                .upsert({
+                    user_id: currentUser.id,
+                    progress_data: progressData,
+                    updated_at: new Date().toISOString()
+                }, {
+                    onConflict: 'user_id'
+                });
+            
+            if (!error) {
+                // Clear demo data from localStorage
+                localStorage.removeItem('userCrops');
+                localStorage.removeItem('userLocation');
+                localStorage.removeItem('cropDetections');
+                localStorage.removeItem('cropObservations');
+                
+                // Update local variables
+                userCrops = progressData.userCrops;
+                userLocation = progressData.location;
+                
+                console.log('Demo data migrated to user account');
+                showNotification('success', 'Data Migrated', 'Your demo data has been transferred to your account.');
+            }
+        } catch (error) {
+            console.error('Error migrating demo data:', error);
+        }
+    }
+}
+
+// ---------------------
+// LOAD USER LOCATION
+// ---------------------
+async function loadUserLocation() {
+    if (currentUser.id === DEMO_USER_ID) {
+        // For demo user, check localStorage
+        const savedLocation = localStorage.getItem('userLocation');
+        if (savedLocation) {
+            try {
+                userLocation = JSON.parse(savedLocation);
+                updateLocationDisplay();
+                fetchWeatherDataFromAPI();
+                hideLocationModal();
+            } catch (error) {
+                showLocationModal();
+            }
+        } else {
+            showLocationModal();
+        }
+    } else {
+        // For logged-in users, location is loaded with progress
+        if (!userLocation) {
+            showLocationModal();
+        }
+    }
+}
+
+// ---------------------
+// FERTILIZER RECOMMENDATION WITH RANDOM FOREST
+// ---------------------
 function loadFertilizerPage() {
     console.log('Loading fertilizer recommendation page');
     const cropSelect = document.getElementById('fertCrop');
@@ -1476,6 +537,7 @@ function loadFertilizerPage() {
 
     if (!cropSelect || !soilTypeSelect || !btn || !results) return;
 
+    // Populate crop options
     cropSelect.innerHTML = '<option value="">-- Select Crop --</option>';
     crops.forEach(c => {
         const opt = document.createElement('option');
@@ -1484,6 +546,7 @@ function loadFertilizerPage() {
         cropSelect.appendChild(opt);
     });
 
+    // Populate soil type options
     const soilTypes = [
         { value: 'red', label: 'Red Soils' },
         { value: 'black', label: 'Black Soils' },
@@ -1504,6 +567,7 @@ function loadFertilizerPage() {
         soilTypeSelect.appendChild(opt);
     });
 
+    // Button action - Use Random Forest model via API
     btn.onclick = async function() {
         const crop = cropSelect.value;
         const soilType = soilTypeSelect.value;
@@ -1513,6 +577,7 @@ function loadFertilizerPage() {
             return;
         }
         
+        // Show loading state
         results.innerHTML = `
             <div class="loading-analysis">
                 <div class="spinner"></div>
@@ -1521,16 +586,21 @@ function loadFertilizerPage() {
         `;
         
         try {
+            // Try to get recommendation from Random Forest model via API
             const fertilizerName = await getFertilizerFromRandomForest(crop, soilType);
+            
+            // Display the result
             displayFertilizerResult(crop, soilType, fertilizerName);
             
         } catch (error) {
             console.error('Random Forest API error:', error);
+            // Fallback to rule-based system
             const fertilizerName = getBestFertilizerForCropAndSoil(crop, soilType);
             displayFertilizerResult(crop, soilType, fertilizerName);
         }
     };
 
+    // Clear previous results
     results.innerHTML = '<p>Select crop type and soil type to get the best fertilizer recommendation (using Random Forest model).</p>';
 }
 
@@ -1898,10 +968,9 @@ function findAlternative(crop, soilType) {
     showNotification('info', 'Alternative Found', `Showing alternative: ${alternative}`);
 }
 
-// ============================
-// TASK MANAGEMENT
-// ============================
-
+// ---------------------
+// GET TASKS FROM DECISION TREE
+// ---------------------
 async function getTasksFromDecisionTree(crop, daysElapsed, growthStage) {
     if (!crop || !selectedCrop) return null;
     
@@ -2016,6 +1085,175 @@ function getDefaultTasks(crop, daysElapsed, growthStage) {
     return tasks;
 }
 
+// ---------------------
+// LOAD ALL USER CROPS
+// ---------------------
+async function loadAllUserCrops() {
+    // This function is now handled by loadUserProgressFromSupabase
+    // Keeping for compatibility
+    updateDashboardWithAllCrops();
+}
+
+// ---------------------
+// UPDATE DASHBOARD WITH ALL CROPS
+// ---------------------
+async function updateDashboardWithAllCrops() {
+    const currentCropElement = document.getElementById('currentCrop');
+    if (!currentCropElement) return;
+    
+    if (userCrops.length === 0) {
+        currentCropElement.innerHTML = `
+            <div class="empty-state">
+                <i class="bi bi-flower1"></i>
+                <h4>No Crops Planted Yet</h4>
+                <p>Select a crop to start your farming journey</p>
+                <button class="btn btn-primary" id="browseCropsBtn">
+                    <i class="bi bi-arrow-right"></i> Browse Crops
+                </button>
+            </div>
+        `;
+        
+        // Add event listener to the button
+        const browseBtn = document.getElementById('browseCropsBtn');
+        if (browseBtn) {
+            browseBtn.addEventListener('click', () => navigateToPage('plants'));
+        }
+        return;
+    }
+    
+    let html = `
+        <div class="dashboard-header">
+            <h3><i class="bi bi-flower2"></i> Your Crops (${userCrops.length})</h3>
+            <button class="btn btn-sm btn-outline" id="addMoreCropsBtn">
+                <i class="bi bi-plus"></i> Add More
+            </button>
+        </div>
+        <div class="crops-grid">
+    `;
+    
+    for (const crop of userCrops) {
+        const cropData = crops.find(c => c.name === crop.crop_type) || {
+            name: crop.crop_type,
+            icon: 'bi-flower1',
+            season: 'Various',
+            duration: 100
+        };
+        
+        const plantingDate = new Date(crop.planting_date);
+        const harvestDate = new Date(plantingDate);
+        harvestDate.setDate(harvestDate.getDate() + cropData.duration);
+        
+        const now = new Date();
+        const totalDays = cropData.duration;
+        const daysElapsed = Math.floor((now - plantingDate) / (1000 * 60 * 60 * 24));
+        const progressPercentage = Math.min(100, Math.max(0, (daysElapsed / totalDays) * 100));
+        
+        let growthStage = 'seedling';
+        if (daysElapsed < 15) growthStage = 'seedling';
+        else if (daysElapsed < 50) growthStage = 'vegetative';
+        else if (daysElapsed < 90) growthStage = 'flowering';
+        else growthStage = 'mature';
+        
+        const isSelected = highlightedPlantingId && highlightedPlantingId === crop.planting_id;
+        
+        html += `
+            <div class="dashboard-crop-card ${isSelected ? 'selected' : ''}" 
+                 data-planting-id="${crop.planting_id}">
+                <div class="crop-card-header">
+                    <i class="bi ${cropData.icon}"></i>
+                    <div>
+                        <h4>${cropData.name}</h4>
+                        <span class="crop-age">${daysElapsed} days old</span>
+                    </div>
+                </div>
+                
+                <div class="crop-progress">
+                    <div class="progress-bar">
+                        <div class="progress-fill" style="width: ${progressPercentage}%"></div>
+                    </div>
+                    <span class="progress-text">${progressPercentage.toFixed(1)}%</span>
+                </div>
+                
+                <div class="crop-details">
+                    <div class="detail-row">
+                        <span class="detail-label">Planted:</span>
+                        <span class="detail-value">${plantingDate.toLocaleDateString()}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Stage:</span>
+                        <span class="detail-value growth-stage-${growthStage}">${growthStage}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Harvest:</span>
+                        <span class="detail-value">${harvestDate.toLocaleDateString()}</span>
+                    </div>
+                </div>
+                
+                <div class="crop-actions">
+                    <button class="btn btn-sm btn-outline view-crop-btn" data-planting-id="${crop.planting_id}">
+                        <i class="bi bi-eye"></i> View
+                    </button>
+                    <button class="btn btn-sm btn-outline remove-crop-btn" data-planting-id="${crop.planting_id}">
+                        <i class="bi bi-trash"></i>
+                    </button>
+                </div>
+            </div>
+        `;
+    }
+    
+    html += `</div>`;
+    currentCropElement.innerHTML = html;
+    
+    // Add event listeners
+    document.querySelectorAll('.dashboard-crop-card').forEach(card => {
+        card.addEventListener('click', function(e) {
+            // Clicking the card should only highlight it (do not open the detail view).
+            if (!e.target.closest('.crop-actions')) {
+                const plantingId = parseInt(this.getAttribute('data-planting-id'));
+                highlightedPlantingId = highlightedPlantingId === plantingId ? null : plantingId;
+                // Re-render to update selected styling
+                updateDashboardWithAllCrops();
+            }
+        });
+    });
+
+    
+    document.querySelectorAll('.view-crop-btn').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const plantingId = parseInt(this.getAttribute('data-planting-id'));
+            // When user explicitly chooses to view details, open the detail page/view
+            viewCropDetails(plantingId);
+        });
+    });
+    
+    document.querySelectorAll('.remove-crop-btn').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const plantingId = parseInt(this.getAttribute('data-planting-id'));
+            removeCrop(plantingId);
+        });
+    });
+    
+    // Add event listener to "Add More" button
+    const addMoreBtn = document.getElementById('addMoreCropsBtn');
+    if (addMoreBtn) {
+        addMoreBtn.addEventListener('click', () => navigateToPage('plants'));
+    }
+    
+    if (currentWeatherData && currentWeatherData.current) {
+        updateWeatherImpact(currentWeatherData.current);
+    }
+    // Show/hide main progress and today's tasks cards based on UI flag
+    const progCard = document.getElementById('growthProgressCard');
+    const tasksCard = document.getElementById('todaysTasksCard');
+    if (progCard) progCard.style.display = showTasksAndProgress ? '' : 'none';
+    if (tasksCard) tasksCard.style.display = showTasksAndProgress ? '' : 'none';
+}
+
+// ---------------------
+// SELECT CROP FOR DETAIL VIEW
+// ---------------------
 async function selectCropForDetail(plantingId) {
     const crop = userCrops.find(c => c.planting_id === plantingId);
     if (crop) {
@@ -2031,20 +1269,306 @@ async function selectCropForDetail(plantingId) {
     }
 }
 
-// ============================
-// NAVIGATION & EVENT LISTENERS
-// ============================
-
-function createNavOverlay() {
-    if (!document.getElementById('navOverlay')) {
-        const overlay = document.createElement('div');
-        overlay.id = 'navOverlay';
-        overlay.className = 'mobile-nav-overlay';
-        overlay.addEventListener('click', toggleNavigation);
-        document.body.appendChild(overlay);
+// ---------------------
+// SHOW CROP DETAIL VIEW
+// ---------------------
+async function showCropDetailView(crop) {
+    const cropData = crops.find(c => c.name === crop.crop_type) || {
+        name: crop.crop_type,
+        icon: 'bi-flower1',
+        season: 'Various',
+        duration: 100
+    };
+    
+    const plantingDate = new Date(crop.planting_date);
+    const harvestDate = new Date(plantingDate);
+    harvestDate.setDate(harvestDate.getDate() + cropData.duration);
+    
+    const now = new Date();
+    const daysElapsed = Math.floor((now - plantingDate) / (1000 * 60 * 60 * 24));
+    const daysRemaining = Math.max(0, cropData.duration - daysElapsed);
+    const progressPercentage = Math.min(100, Math.max(0, (daysElapsed / cropData.duration) * 100));
+    
+    let growthStage = 'seedling';
+    if (daysElapsed < 15) growthStage = 'seedling';
+    else if (daysElapsed < 50) growthStage = 'vegetative';
+    else if (daysElapsed < 90) growthStage = 'flowering';
+    else growthStage = 'mature';
+    
+    // Get tasks from Decision Tree model
+    const tasks = await getTasksFromDecisionTree(cropData, daysElapsed, growthStage);
+    
+    const detailView = `
+        <div class="crop-detail-view">
+            <div class="detail-header">
+                <button class="btn btn-sm btn-outline" id="backToAllBtn">
+                    <i class="bi bi-arrow-left"></i> Back to All
+                </button>
+                <h3><i class="bi ${cropData.icon}"></i> ${cropData.name} Details</h3>
+                <span class="model-badge">Decision Tree Tasks</span>
+            </div>
+            
+            <div class="detail-main">
+                <div class="detail-stats">
+                    <div class="stat-box">
+                        <div class="stat-value">${daysElapsed}</div>
+                        <div class="stat-label">Days Elapsed</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value">${daysRemaining}</div>
+                        <div class="stat-label">Days Remaining</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value">${cropData.duration}</div>
+                        <div class="stat-label">Total Duration</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value">${growthStage}</div>
+                        <div class="stat-label">Growth Stage</div>
+                    </div>
+                </div>
+                
+                <div class="progress-section">
+                    <div class="progress-label">Growth Progress</div>
+                    <div class="progress-bar-large">
+                        <div class="progress-fill" style="width: ${progressPercentage}%"></div>
+                    </div>
+                    <div class="progress-text">${progressPercentage.toFixed(1)}% Complete</div>
+                </div>
+                
+                <div class="detail-section">
+                    <h4><i class="bi bi-calendar"></i> Timeline</h4>
+                    <div class="timeline">
+                        <div class="timeline-item">
+                            <div class="timeline-date">${plantingDate.toLocaleDateString()}</div>
+                            <div class="timeline-dot"></div>
+                            <div class="timeline-content">
+                                <strong>Planted</strong>
+                                <p>Crop planting initiated</p>
+                            </div>
+                        </div>
+                        <div class="timeline-item">
+                            <div class="timeline-date">${harvestDate.toLocaleDateString()}</div>
+                            <div class="timeline-dot harvest"></div>
+                            <div class="timeline-content">
+                                <strong>Expected Harvest</strong>
+                                <p>Target harvest date</p>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="detail-section">
+                    <h4><i class="bi bi-clipboard-check"></i> Today's Tasks (AI Recommended)</h4>
+                    <div class="today-tasks-header">
+                        <div class="day-progress-label">Today's Completion</div>
+                        <div class="day-progress-bar">
+                            <div id="todayTasksOverallFill" class="day-progress-fill" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <div id="todaysTasksDetail"></div>
+                </div>
+            </div>
+        </div>
+    `;
+    
+    const currentCropElement = document.getElementById('currentCrop');
+    if (currentCropElement) {
+        currentCropElement.innerHTML = detailView;
+        updateTasksForDetail(tasks);
+        
+        // Add event listener to back button
+        const backBtn = document.getElementById('backToAllBtn');
+        if (backBtn) {
+            backBtn.addEventListener('click', showAllCrops);
+        }
     }
 }
 
+// ---------------------
+// UPDATE TASKS FOR DETAIL VIEW (with per-task check & progress)
+// ---------------------
+function updateTasksForDetail(tasks) {
+    const tasksContainer = document.getElementById('todaysTasksDetail');
+    if (!tasksContainer) return;
+    const plantingId = selectedCrop ? selectedCrop.planting_id : currentPlantingId;
+    const today = getTodayStr();
+
+    if (!tasks || tasks.length === 0) {
+        tasksContainer.innerHTML = `
+            <div class="info-note">
+                <i class="bi bi-info-circle"></i>
+                <span>No specific tasks for today. Continue regular monitoring.</span>
+            </div>
+        `;
+        updateTodayTasksOverallProgress(plantingId, 0, 0);
+        return;
+    }
+
+    const completions = loadTaskCompletionsForPlanting(plantingId);
+    const todays = (completions && completions[today]) ? completions[today] : {};
+
+    tasksContainer.innerHTML = '';
+    let completedCount = 0;
+
+    tasks.forEach((task, idx) => {
+        const done = todays[idx] && todays[idx].completed;
+        if (done) completedCount++;
+        const modelBadge = task.model ? `<span class="model-badge-small">${task.model}</span>` : '';
+
+        const html = `
+            <div class="task-item ${task.priority || 'medium'}" data-task-idx="${idx}">
+                <i class="bi ${task.icon || 'bi-check-circle'}"></i>
+                <div class="task-content">
+                    <div class="task-title">${task.task}</div>
+                    <div class="task-description">${task.description}</div>
+                    ${modelBadge}
+                </div>
+                <div class="task-controls">
+                    <button class="btn task-check-btn ${done ? 'done' : ''}" data-idx="${idx}" title="${done ? 'Mark as not done' : 'Mark as done'}">
+                        <i class="bi ${done ? 'bi-check-lg' : 'bi-circle'}"></i>
+                    </button>
+                    <div class="task-progress">
+                        <div class="task-progress-fill" style="width: ${done ? 100 : 0}%"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        tasksContainer.insertAdjacentHTML('beforeend', html);
+    });
+
+    // Attach listeners to check buttons
+    tasksContainer.querySelectorAll('.task-check-btn').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const idx = parseInt(this.getAttribute('data-idx'));
+            toggleTaskCompletion(plantingId, idx);
+        });
+    });
+
+    updateTodayTasksOverallProgress(plantingId, completedCount, tasks.length);
+}
+
+// ---------------------
+// TASK COMPLETION STORAGE & HELPERS
+// ---------------------
+function getTodayStr() {
+    const t = new Date();
+    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+}
+
+function loadTaskCompletions() {
+    return JSON.parse(localStorage.getItem('taskCompletions') || '{}');
+}
+
+function saveTaskCompletions(obj) {
+    localStorage.setItem('taskCompletions', JSON.stringify(obj));
+    // Persist user progress so server can later be extended to include tasks
+    try {
+        saveUserProgressToSupabase();
+    } catch (e) {
+        // ignore if not available
+    }
+}
+
+function loadTaskCompletionsForPlanting(plantingId) {
+    const all = loadTaskCompletions();
+    return all[plantingId] || {};
+}
+
+function toggleTaskCompletion(plantingId, idx) {
+    const date = getTodayStr();
+    const all = loadTaskCompletions();
+    if (!all[plantingId]) all[plantingId] = {};
+    if (!all[plantingId][date]) all[plantingId][date] = {};
+
+    const current = all[plantingId][date][idx] ? all[plantingId][date][idx].completed : false;
+    all[plantingId][date][idx] = { completed: !current, timestamp: new Date().toISOString() };
+
+    saveTaskCompletions(all);
+
+    // Update UI for the specific task
+    const tasksContainer = document.getElementById('todaysTasksDetail');
+    const item = tasksContainer ? tasksContainer.querySelector(`.task-item[data-task-idx="${idx}"]`) : null;
+    if (item) {
+        const btn = item.querySelector('.task-check-btn');
+        const fill = item.querySelector('.task-progress-fill');
+        if (all[plantingId][date][idx].completed) {
+            btn.classList.add('done');
+            btn.innerHTML = '<i class="bi bi-check-lg"></i>';
+            fill.style.width = '100%';
+        } else {
+            btn.classList.remove('done');
+            btn.innerHTML = '<i class="bi bi-circle"></i>';
+            fill.style.width = '0%';
+        }
+    }
+
+    // Recalculate overall
+    const tasksElems = tasksContainer ? tasksContainer.querySelectorAll('.task-item') : [];
+    let doneCount = 0;
+    tasksElems.forEach(el => {
+        const idxAttr = parseInt(el.getAttribute('data-task-idx'));
+        const done = all[plantingId][date] && all[plantingId][date][idxAttr] && all[plantingId][date][idxAttr].completed;
+        if (done) doneCount++;
+    });
+    updateTodayTasksOverallProgress(plantingId, doneCount, tasksElems.length);
+
+    showNotification('success', 'Task updated', all[plantingId][date][idx].completed ? 'Marked done for today' : 'Marked not done');
+}
+
+function updateTodayTasksOverallProgress(plantingId, completedCount, total) {
+    const fill = document.getElementById('todayTasksOverallFill');
+    const percent = total === 0 ? 0 : Math.round((completedCount / total) * 100);
+    if (fill) fill.style.width = `${percent}%`;
+    const label = document.querySelector('.day-progress-label');
+    if (label) label.textContent = `Today's Completion — ${percent}% (${completedCount}/${total})`;
+}
+
+// ---------------------
+// SHOW ALL CROPS (Return to dashboard)
+// ---------------------
+function showAllCrops() {
+    selectedCrop = null;
+    currentPlantingId = null;
+    // Reset UI flags so main dashboard doesn't show tasks/progress
+    showTasksAndProgress = false;
+    highlightedPlantingId = null;
+    updateDashboardWithAllCrops();
+    updateWeatherImpact(currentWeatherData ? currentWeatherData.current : null);
+}
+
+// ---------------------
+// VIEW CROP DETAILS (Alternative)
+// ---------------------
+function viewCropDetails(plantingId) {
+    selectCropForDetail(plantingId);
+}
+
+// ---------------------
+// REMOVE CROP
+// ---------------------
+async function removeCrop(plantingId) {
+    if (confirm('Are you sure you want to remove this crop? This will delete all associated data.')) {
+        userCrops = userCrops.filter(crop => crop.planting_id !== plantingId);
+        
+        if (selectedCrop && selectedCrop.planting_id === plantingId) {
+            selectedCrop = null;
+            currentPlantingId = null;
+        }
+        
+        // Save progress after removal
+        await saveUserProgressToSupabase();
+        
+        updateDashboardWithAllCrops();
+        showNotification('info', 'Crop Removed', 'Crop has been removed from your account.');
+    }
+}
+
+// ---------------------
+// EVENT LISTENERS SETUP
+// ---------------------
 function setupEventListeners() {
     console.log('Setting up event listeners...');
     
@@ -2090,14 +1614,9 @@ function setupEventListeners() {
     const imageUpload = document.getElementById('imageUpload');
     if (imageUpload) imageUpload.addEventListener('change', handleImageUpload);
 
-    const loginBtn = document.getElementById('loginBtn');
-    if (loginBtn) {
-        loginBtn.addEventListener('click', showLoginModal);
-    }
-
-    const manualEntryBtn = document.getElementById('manualEntryBtn');
-    if (manualEntryBtn) {
-        manualEntryBtn.addEventListener('click', showManualEntryModal);
+    const logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', logoutUser);
     }
 
     document.addEventListener('click', function(e) {
@@ -2123,40 +1642,12 @@ function setupEventListeners() {
     });
 }
 
+// ---------------------
+// SETUP NAVIGATION LISTENERS
+// ---------------------
 function setupNavigationListeners() {
     console.log('Setting up navigation listeners...');
     
-    const calendarNavItem = document.querySelector('[data-page="calendar"]');
-    if (calendarNavItem) {
-        calendarNavItem.style.display = 'none';
-    }
-    
-    const navContainer = document.getElementById('navItems');
-    if (!navContainer) {
-        setupDirectNavigationListeners();
-        return;
-    }
-    
-    navContainer.addEventListener('click', function(e) {
-        const navItem = e.target.closest('.nav-item');
-        if (!navItem) return;
-        
-        e.preventDefault();
-        
-        if (navItem.id === 'logoutBtn') {
-            handleLogout();
-        } else {
-            const page = navItem.getAttribute('data-page');
-            if (page && page !== 'calendar') {
-                navigateToPage(page);
-            }
-        }
-    });
-    
-    setupDirectNavigationListeners();
-}
-
-function setupDirectNavigationListeners() {
     const navItems = document.querySelectorAll('.nav-item');
     console.log(`Found ${navItems.length} nav items to set up listeners`);
     
@@ -2172,7 +1663,7 @@ function setupDirectNavigationListeners() {
             console.log('Nav item clicked:', this.id, this.getAttribute('data-page'));
             
             if (this.id === 'logoutBtn') {
-                handleLogout();
+                logoutUser();
             } else {
                 const page = this.getAttribute('data-page');
                 if (page) {
@@ -2183,11 +1674,13 @@ function setupDirectNavigationListeners() {
     });
 }
 
+// ---------------------
+// NAVIGATION FUNCTIONS
+// ---------------------
 function toggleNavigation() {
     console.log('Toggling navigation...');
     const sideNav = document.getElementById('side_nav');
     const menuToggle = document.getElementById('menuToggle');
-    const navOverlay = document.getElementById('navOverlay');
     
     if (!sideNav) {
         console.error('Side navigation not found!');
@@ -2196,10 +1689,6 @@ function toggleNavigation() {
     
     const isOpening = !sideNav.classList.contains('active');
     sideNav.classList.toggle('active');
-    
-    if (navOverlay) {
-        navOverlay.classList.toggle('active');
-    }
     
     if (menuToggle) {
         let iconEl = null;
@@ -2251,14 +1740,13 @@ function navigateToPage(pageName) {
 
     currentPage = pageName;
     
+    // Always close the navbar when navigating to a page
     const sideNav = document.getElementById('side_nav');
     if (sideNav && sideNav.classList.contains('active')) {
         toggleNavigation();
     }
 
-    if (pageName === 'analytics') {
-        loadAnalytics();
-    } else if (pageName === 'plants') {
+    if (pageName === 'plants') {
         initializePlantsGrid();
     } else if (pageName === 'fertilizer') {
         loadFertilizerPage();
@@ -2269,6 +1757,9 @@ function navigateToPage(pageName) {
     console.log('Navigation complete to:', pageName);
 }
 
+// ---------------------
+// INITIALIZE NAVIGATION
+// ---------------------
 function initializeNavigation() {
     console.log('Initializing navigation...');
     
@@ -2289,10 +1780,26 @@ function initializeNavigation() {
     }, 100);
 }
 
-// ============================
-// LOCATION FUNCTIONS
-// ============================
+// ---------------------
+// USER FUNCTIONS
+// ---------------------
+function updateUserDisplay() {
+    const loginBtn = document.getElementById('logoutBtn');
+    
+    if (loginBtn) {
+        if (currentUser.id === DEMO_USER_ID) {
+            loginBtn.innerHTML = '<i class="bi bi-box-arrow-in-right"></i> Login';
+            loginBtn.id = 'loginBtn';
+        } else {
+            loginBtn.innerHTML = '<i class="bi bi-box-arrow-right"></i> Logout';
+            loginBtn.id = 'logoutBtn';
+        }
+    }
+}
 
+// ---------------------
+// LOCATION FUNCTIONS
+// ---------------------
 function showLocationModal() {
     const locationModal = document.getElementById('locationModal');
     if (locationModal) locationModal.style.display = 'flex';
@@ -2303,7 +1810,7 @@ function hideLocationModal() {
     if (locationModal) locationModal.style.display = 'none';
 }
 
-function detectLocation() {
+async function detectLocation() {
     const autoDetectBtn = document.getElementById('autoDetectBtn');
     
     if (navigator.geolocation) {
@@ -2313,7 +1820,7 @@ function detectLocation() {
         }
         
         navigator.geolocation.getCurrentPosition(
-            (position) => {
+            async (position) => {
                 const lat = position.coords.latitude;
                 const lon = position.coords.longitude;
                 
@@ -2326,7 +1833,7 @@ function detectLocation() {
                 updateLocationDisplay();
                 fetchWeatherDataFromAPI();
                 hideLocationModal();
-                saveLocation();
+                await saveUserProgressToSupabase();
                 
                 if (autoDetectBtn) {
                     autoDetectBtn.innerHTML = '<i class="bi bi-geo-alt"></i> Auto Detect Location';
@@ -2346,7 +1853,7 @@ function detectLocation() {
     }
 }
 
-function setManualLocation() {
+async function setManualLocation() {
     const manualLocation = document.getElementById('manualLocation');
     const locationName = manualLocation ? manualLocation.value.trim() : '';
     
@@ -2360,7 +1867,7 @@ function setManualLocation() {
         updateLocationDisplay();
         fetchWeatherDataFromAPI();
         hideLocationModal();
-        saveLocation();
+        await saveUserProgressToSupabase();
         
         if (manualLocation) manualLocation.value = '';
     } else {
@@ -2375,20 +1882,9 @@ function updateLocationDisplay() {
     }
 }
 
-function saveLocation() {
-    if (userLocation) {
-        localStorage.setItem('userLocation', JSON.stringify(userLocation));
-        
-        if (currentUser && currentUser.id !== DEMO_USER_ID) {
-            saveUserSettings({ location: userLocation });
-        }
-    }
-}
-
-// ============================
-// WEATHER FUNCTIONS
-// ============================
-
+// ---------------------
+// WEATHER API FUNCTIONS
+// ---------------------
 async function fetchWeatherDataFromAPI() {
     if (!userLocation) return;
     
@@ -2569,10 +2065,9 @@ function fetchMockWeatherData() {
     updateWeatherImpact(mockCurrent);
 }
 
-// ============================
-// CROP SELECTION FUNCTIONS
-// ============================
-
+// ---------------------
+// CROP SELECTION WITH DATE PICKER
+// ---------------------
 function initializePlantsGrid() {
     const plantsGrid = document.querySelector('.plants-grid');
     if (!plantsGrid) return;
@@ -2587,7 +2082,9 @@ function initializePlantsGrid() {
             <h4>${crop.name}</h4>
             <p>Season: ${crop.season}</p>
             <p>Duration: ${crop.duration} days</p>
-            <button class="btn-plant" data-crop="${crop.name}">Plant Now</button>
+            <button class="btn-plant" data-crop="${crop.name}">
+                <i class="bi bi-seed"></i> Plant Now
+            </button>
         `;
         
         const plantBtn = plantCard.querySelector('.btn-plant');
@@ -2599,16 +2096,13 @@ function initializePlantsGrid() {
             });
         }
         
-        plantCard.addEventListener('click', (e) => {
-            if (!e.target.classList.contains('btn-plant')) {
-                console.log('Plant card clicked for info:', crop.name);
-            }
-        });
-        
         plantsGrid.appendChild(plantCard);
     });
 }
 
+// ---------------------
+// SHOW PLANTING CALENDAR POPUP
+// ---------------------
 function showPlantingCalendar(crop) {
     console.log('Showing planting calendar for:', crop.name);
     
@@ -2624,7 +2118,7 @@ function showPlantingCalendar(crop) {
         <div class="modal planting-calendar-modal">
             <div class="modal-header">
                 <h4><i class="bi ${crop.icon}"></i> Plant ${crop.name}</h4>
-                <button class="btn-close" onclick="this.closest('.modal-overlay').remove()">&times;</button>
+                <button class="btn-close" id="closePlantingModal">&times;</button>
             </div>
             <div class="modal-body">
                 <p>Select your planting date for ${crop.name}</p>
@@ -2635,20 +2129,29 @@ function showPlantingCalendar(crop) {
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
-                <button class="btn btn-primary" onclick="confirmPlanting('${crop.name}')">Confirm Planting</button>
+                <button class="btn btn-outline" id="cancelPlanting">Cancel</button>
+                <button class="btn btn-primary" id="confirmPlanting">Confirm Planting</button>
             </div>
         </div>
     `;
     
     document.body.appendChild(modal);
     
+    // Add event listeners
+    document.getElementById('closePlantingModal').addEventListener('click', () => modal.remove());
+    document.getElementById('cancelPlanting').addEventListener('click', () => modal.remove());
+    document.getElementById('confirmPlanting').addEventListener('click', () => confirmPlanting(crop.name));
+    
     setTimeout(() => initializePlantingCalendar(), 100);
 }
 
+// Global variables for calendar navigation
 let currentCalendarMonth = null;
 let currentCalendarYear = null;
 
+// ---------------------
+// INITIALIZE PLANTING CALENDAR
+// ---------------------
 function initializePlantingCalendar() {
     const calendarContainer = document.getElementById('plantingCalendar');
     if (!calendarContainer) return;
@@ -2662,6 +2165,9 @@ function initializePlantingCalendar() {
     calendarContainer.innerHTML = generatePlantingCalendarHTML(currentCalendarMonth, currentCalendarYear);
 }
 
+// ---------------------
+// GENERATE PLANTING CALENDAR HTML
+// ---------------------
 function generatePlantingCalendarHTML(month, year) {
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
@@ -2670,11 +2176,11 @@ function generatePlantingCalendarHTML(month, year) {
     
     let html = `
         <div class="calendar-popup-header">
-            <button class="btn-calendar-nav" onclick="changePlantingMonth(-1)">
+            <button class="btn-calendar-nav" id="prevMonth">
                 <i class="bi bi-chevron-left"></i>
             </button>
             <h5>${firstDay.toLocaleDateString('en', { month: 'long', year: 'numeric' })}</h5>
-            <button class="btn-calendar-nav" onclick="changePlantingMonth(1)">
+            <button class="btn-calendar-nav" id="nextMonth">
                 <i class="bi bi-chevron-right"></i>
             </button>
         </div>
@@ -2708,8 +2214,7 @@ function generatePlantingCalendarHTML(month, year) {
         
         html += `
             <div class="${dayClass}" 
-                 data-date="${dateStr}"
-                 onclick="${!isPast && !isTooFarFuture ? 'selectPlantingDate(this)' : ''}">
+                 data-date="${dateStr}">
                 ${day}
                 ${isToday ? '<div class="today-badge">Today</div>' : ''}
             </div>
@@ -2726,9 +2231,37 @@ function generatePlantingCalendarHTML(month, year) {
         </div>
     `;
     
+    // Add event listeners after the HTML is inserted
+    setTimeout(() => {
+        // Month navigation
+        const prevMonthBtn = document.getElementById('prevMonth');
+        const nextMonthBtn = document.getElementById('nextMonth');
+        
+        if (prevMonthBtn) {
+            prevMonthBtn.addEventListener('click', () => changePlantingMonth(-1));
+        }
+        if (nextMonthBtn) {
+            nextMonthBtn.addEventListener('click', () => changePlantingMonth(1));
+        }
+        
+        // Day selection
+        document.querySelectorAll('.calendar-popup-day:not(.past):not(.future)').forEach(day => {
+            day.addEventListener('click', () => selectPlantingDate(day));
+        });
+        
+        // Select today by default
+        const todayElement = document.querySelector('.calendar-popup-day.today');
+        if (todayElement) {
+            selectPlantingDate(todayElement);
+        }
+    }, 0);
+    
     return html;
 }
 
+// ---------------------
+// SELECT PLANTING DATE
+// ---------------------
 function selectPlantingDate(element) {
     if (element.classList.contains('past') || element.classList.contains('future')) {
         return;
@@ -2746,6 +2279,9 @@ function selectPlantingDate(element) {
     document.getElementById('plantingDateInput').value = date;
 }
 
+// ---------------------
+// CHANGE PLANTING MONTH
+// ---------------------
 function changePlantingMonth(delta) {
     if (currentCalendarMonth === null || currentCalendarYear === null) {
         const today = new Date();
@@ -2766,10 +2302,44 @@ function changePlantingMonth(delta) {
     initializePlantingCalendar();
 }
 
-// ============================
-// PROGRESS TRACKING
-// ============================
+// ---------------------
+// CONFIRM PLANTING
+// ---------------------
+async function confirmPlanting(cropName) {
+    const crop = crops.find(c => c.name === cropName);
+    if (!crop) return;
+    
+    const plantingDate = document.getElementById('plantingDateInput').value;
+    const plantingId = Date.now();
+    
+    const newCrop = {
+        planting_id: plantingId,
+        crop_type: crop.name,
+        planting_date: plantingDate,
+        user_id: currentUser.id,
+        created_at: new Date().toISOString()
+    };
+    
+    // Add to local array
+    userCrops.push(newCrop);
+    
+    // Save to Supabase
+    await saveUserProgressToSupabase();
+    
+    // Close modal and update UI
+    const modal = document.querySelector('.modal-overlay');
+    if (modal) modal.remove();
+    
+    updateDashboardWithAllCrops();
+    navigateToPage('home');
+    
+    showNotification('success', `${crop.name} Planted!`, 
+                   `Planted on ${new Date(plantingDate).toLocaleDateString()}. Progress saved to your account.`);
+}
 
+// ---------------------
+// PROGRESS TRACKING
+// ---------------------
 function startProgressTracking() {
     if (progressUpdateInterval) {
         clearInterval(progressUpdateInterval);
@@ -2777,6 +2347,163 @@ function startProgressTracking() {
     
     updateProgress();
     progressUpdateInterval = setInterval(updateProgress, 60000);
+}
+
+async function updateProgress() {
+    if (!currentPlantingId || !selectedCrop) return;
+    
+    try {
+        const response = await fetch(`${API_BASE_URL}/crop/${currentPlantingId}/progress`);
+        
+        if (response.ok) {
+            const data = await response.json();
+            
+            if (!data.error) {
+                updateProgressFromAPI(data);
+                return;
+            }
+        }
+        
+        updateProgressLocally();
+        
+    } catch (error) {
+        console.error('Error updating progress:', error);
+        updateProgressLocally();
+    }
+}
+
+function updateProgressFromAPI(data) {
+    const progressFill = document.querySelector('.progress-fill');
+    const progressText = document.querySelector('.progress-text');
+    if (progressFill && progressText) {
+        progressFill.style.width = `${data.progress_percentage}%`;
+        progressText.textContent = `${data.progress_percentage.toFixed(1)}% Complete`;
+        
+        if (parseFloat(data.progress_percentage) > 0) {
+            progressFill.classList.add('progress-animate');
+            setTimeout(() => {
+                progressFill.classList.remove('progress-animate');
+            }, 500);
+        }
+    }
+    
+    const growthStageElement = document.querySelector('.growth-stage');
+    if (growthStageElement) {
+        growthStageElement.textContent = data.growth_stage;
+        growthStageElement.className = `growth-stage stage-${data.growth_stage.toLowerCase()}`;
+    }
+    
+    const daysElapsedElement = document.querySelector('.days-elapsed');
+    const daysRemainingElement = document.querySelector('.days-remaining');
+    if (daysElapsedElement) daysElapsedElement.textContent = data.days_elapsed;
+    if (daysRemainingElement) daysRemainingElement.textContent = data.days_remaining;
+    
+    updateTasks(data.growth_stage, data.progress_percentage);
+    checkMilestones(data.days_elapsed, data.growth_stage);
+}
+
+async function updateProgressLocally() {
+    if (!selectedCrop) return;
+    
+    const plantingDate = new Date(selectedCrop.planting_date);
+    const now = new Date();
+    const daysElapsed = Math.floor((now - plantingDate) / (1000 * 60 * 60 * 24));
+    
+    const cropData = crops.find(c => c.name === selectedCrop.crop_type);
+    const totalDays = cropData ? cropData.duration : 100;
+    const progressPercentage = Math.min(99.9, (daysElapsed / totalDays) * 100);
+    
+    let growthStage = 'seedling';
+    if (daysElapsed < 15) growthStage = 'seedling';
+    else if (daysElapsed < 50) growthStage = 'vegetative';
+    else if (daysElapsed < 90) growthStage = 'flowering';
+    else growthStage = 'mature';
+    
+    const progressFill = document.querySelector('.progress-fill');
+    const progressText = document.querySelector('.progress-text');
+    if (progressFill && progressText) {
+        progressFill.style.width = `${progressPercentage}%`;
+        progressText.textContent = `${progressPercentage.toFixed(1)}% Complete`;
+        
+        if (progressPercentage > 0) {
+            progressFill.classList.add('progress-animate');
+            setTimeout(() => {
+                progressFill.classList.remove('progress-animate');
+            }, 500);
+        }
+    }
+    
+    const growthStageElement = document.querySelector('.growth-stage');
+    if (growthStageElement) {
+        growthStageElement.textContent = growthStage;
+        growthStageElement.className = `growth-stage stage-${growthStage.toLowerCase()}`;
+    }
+    
+    const daysElapsedElement = document.querySelector('.days-elapsed');
+    const daysRemainingElement = document.querySelector('.days-remaining');
+    if (daysElapsedElement) daysElapsedElement.textContent = daysElapsed;
+    if (daysRemainingElement) daysRemainingElement.textContent = Math.max(0, totalDays - daysElapsed);
+    
+    // Update tasks using Decision Tree model
+    const cropDataObj = crops.find(c => c.name === selectedCrop.crop_type) || {
+        name: selectedCrop.crop_type,
+        duration: 100
+    };
+    const tasks = await getTasksFromDecisionTree(cropDataObj, daysElapsed, growthStage);
+    await updateTasksWithAI(tasks || [], growthStage, progressPercentage);
+    
+    checkMilestones(daysElapsed, growthStage);
+}
+
+async function updateTasksWithAI(tasks, growthStage, progress) {
+    const tasksList = document.getElementById('todaysTasks');
+    if (!tasksList) return;
+    
+    // If the UI flag says don't show tasks on the main dashboard, keep it minimal.
+    if (!showTasksAndProgress) {
+        tasksList.innerHTML = '<p>No tasks scheduled</p>';
+        return;
+    }
+    
+    // If no tasks from Decision Tree, use default tasks
+    if (!tasks || tasks.length === 0) {
+        tasks = getDefaultTasks(
+            crops.find(c => c.name === selectedCrop.crop_type),
+            Math.floor((new Date() - new Date(selectedCrop.planting_date)) / (1000 * 60 * 60 * 24)),
+            growthStage
+        );
+    }
+    
+    tasksList.innerHTML = '';
+    tasks.forEach(task => {
+        const taskItem = document.createElement('div');
+        taskItem.className = `task-item ${task.priority || 'medium'}`;
+        
+        let modelBadge = '';
+        if (task.model) {
+            modelBadge = `<span class="model-badge-small">${task.model}</span>`;
+        }
+        
+        taskItem.innerHTML = `
+            <i class="bi ${task.icon || 'bi-check-circle'}"></i>
+            <div class="task-content">
+                <div class="task-title">${task.task}</div>
+                <div class="task-description">${task.description}</div>
+                ${modelBadge}
+            </div>
+            <i class="bi bi-check-circle task-check"></i>
+        `;
+        
+        taskItem.addEventListener('click', function() {
+            this.classList.toggle('completed');
+        });
+        
+        tasksList.appendChild(taskItem);
+    });
+}
+
+function updateTasks(growthStage, progress) {
+    // This function is kept for compatibility
 }
 
 function checkMilestones(daysElapsed, growthStage) {
@@ -2792,10 +2519,9 @@ function checkMilestones(daysElapsed, growthStage) {
     }
 }
 
-// ============================
+// ---------------------
 // AI RECOMMENDATIONS
-// ============================
-
+// ---------------------
 async function getAIRecommendation(plantingId) {
     try {
         const response = await fetch(`${API_BASE_URL}/crop/${plantingId}/recommend`, {
@@ -2946,95 +2672,9 @@ async function implementRecommendation(recommendationId) {
     }
 }
 
-// ============================
-// MANUAL DATA ENTRY
-// ============================
-
-function showManualEntryModal() {
-    const modal = document.getElementById('manualEntryModal');
-    if (modal) {
-        modal.style.display = 'flex';
-        
-        if (selectedCrop) {
-            const soilPhInput = document.getElementById('manualSoilPh');
-            if (soilPhInput) {
-                const idealPh = {
-                    'Tomato': 6.2,
-                    'Rice': 6.0,
-                    'Wheat': 6.5,
-                    'Maize': 6.8,
-                    'Potato': 5.5
-                };
-                soilPhInput.value = idealPh[selectedCrop.crop_type] || 6.5;
-            }
-        }
-    }
-}
-
-function hideManualEntryModal() {
-    const modal = document.getElementById('manualEntryModal');
-    if (modal) modal.style.display = 'none';
-}
-
-async function submitManualData() {
-    const form = document.getElementById('manualEntryForm');
-    if (!form) return;
-    
-    const formData = {
-        soil_moisture: parseFloat(document.getElementById('manualSoilMoisture').value) || 50,
-        temperature: parseFloat(document.getElementById('manualTemperature').value) || 25,
-        humidity: parseFloat(document.getElementById('manualHumidity').value) || 60,
-        soil_ph: parseFloat(document.getElementById('manualSoilPh').value) || 6.5,
-        pest_level: document.getElementById('manualPestLevel').value || 'low',
-        disease_observed: document.getElementById('manualDisease').checked ? 1 : 0,
-        notes: document.getElementById('manualNotes').value || ''
-    };
-    
-    try {
-        if (currentPlantingId) {
-            const response = await fetch(`${API_BASE_URL}/crop/${currentPlantingId}/observation`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(formData)
-            });
-            
-            if (response.ok) {
-                showNotification('success', 'Data Saved!', 'Manual entry submitted successfully.');
-            } else {
-                saveObservationLocally(formData);
-                showNotification('success', 'Data Saved Locally!', 'Manual entry saved to browser storage.');
-            }
-            
-            hideManualEntryModal();
-            form.reset();
-            await getAIRecommendation(currentPlantingId);
-        } else {
-            showNotification('warning', 'No Active Crop', 'Please select a crop first.');
-        }
-    } catch (error) {
-        console.error('Error submitting manual data:', error);
-        saveObservationLocally(formData);
-        showNotification('success', 'Data Saved Locally!', 'Manual entry saved to browser storage.');
-        hideManualEntryModal();
-        form.reset();
-    }
-}
-
-function saveObservationLocally(observation) {
-    const observations = JSON.parse(localStorage.getItem('cropObservations') || '[]');
-    observations.push({
-        ...observation,
-        planting_id: currentPlantingId,
-        timestamp: new Date().toISOString(),
-        crop_type: selectedCrop?.crop_type
-    });
-    localStorage.setItem('cropObservations', JSON.stringify(observations));
-}
-
-// ============================
-// IMAGE ANALYSIS FUNCTIONS
-// ============================
-
+// ---------------------
+// ML MODEL FUNCTIONS
+// ---------------------
 async function loadModel() {
     try {
         const resp = await fetch(`${API_BASE_URL}/predict`, {
@@ -3055,6 +2695,18 @@ async function loadModel() {
         console.warn('Could not reach backend predict endpoint:', e.message);
     }
     console.warn('No ML model available (frontend will show manual analysis).');
+}
+
+async function loadLabels() {
+    try {
+        const r = await fetch(MODEL_CONFIG.labelsUrl);
+        if (!r.ok) throw new Error('no labels file');
+        labels = await r.json();
+        console.log('Labels loaded:', labels.length);
+    } catch (e) {
+        console.warn('Labels not found — will use numeric indices.');
+        labels = null;
+    }
 }
 
 function handleImageUpload(event) {
@@ -3110,6 +2762,75 @@ async function predictFromFile(file) {
     }
 }
 
+function getCenterCropParams(w, h, targetW, targetH) {
+    const srcAspect = w / h;
+    const targetAspect = targetW / targetH;
+    if (srcAspect > targetAspect) {
+        const newW = Math.round(h * targetAspect);
+        const sx = Math.round((w - newW) / 2);
+        return [sx, 0, newW, h];
+    } else {
+        const newH = Math.round(w / targetAspect);
+        const sy = Math.round((h - newH) / 2);
+        return [0, sy, w, newH];
+    }
+}
+
+async function predictTF(canvas) {
+    try {
+        let t = tf.browser.fromPixels(canvas).toFloat();
+        t = t.div(255.0);
+        t = t.expandDims(0);
+
+        const logits = tfModel.predict ? tfModel.predict(t) : tfModel.execute(t);
+        const probs = await (logits.data ? logits.data() : logits.array());
+        const arr = Array.from(probs);
+        const top = getTopK(arr, 3);
+        renderResults(top);
+        tf.dispose([t, logits]);
+    } catch (err) {
+        console.error('TF predict error:', err);
+        displayNote('Prediction failed (TF.js). See console for details.');
+    }
+}
+
+async function predictONNX(canvas) {
+    try {
+        const ctx = canvas.getContext('2d');
+        const imageData = ctx.getImageData(0,0,canvas.width,canvas.height).data;
+        const W = canvas.width, H = canvas.height;
+        const floatData = new Float32Array(1 * 3 * H * W);
+        let idx = 0;
+        for (let c = 0; c < 3; c++) {
+            for (let y = 0; y < H; y++) {
+                for (let x = 0; x < W; x++) {
+                    const p = (y * W + x) * 4;
+                    const val = imageData[p + c];
+                    floatData[idx++] = val / 255.0;
+                }
+            }
+        }
+        const inputName = onnxSession.inputNames && onnxSession.inputNames.length ? onnxSession.inputNames[0] : 'input';
+        const feeds = {};
+        feeds[inputName] = new ort.Tensor('float32', floatData, [1,3,H,W]);
+        const results = await onnxSession.run(feeds);
+        const outName = Object.keys(results)[0];
+        const outputData = results[outName].data;
+        const arr = Array.from(outputData);
+        const top = getTopK(arr, 3);
+        renderResults(top);
+    } catch (err) {
+        console.error('ONNX predict error:', err);
+        displayNote('Prediction failed (ONNX). See console for details.');
+    }
+}
+
+function getTopK(arr, k=3) {
+    const indexed = arr.map((v,i) => ({i, v}));
+    indexed.sort((a,b) => b.v - a.v);
+    return indexed.slice(0,k).map(x => ({idx: x.i, score: x.v}));
+}
+
 function renderResults(topList) {
     const resultArea = document.getElementById('detectionResult');
     if (!resultArea) return;
@@ -3120,66 +2841,17 @@ function renderResults(topList) {
     if (topList.length === 0) {
         html += '<p class="no-results">No clear detection. Please try another image.</p>';
     } else {
-        const plantRegex = /(tomato|potato|pepper|bell|eggplant|cucumber|okra)/i;
-        const plantEntries = {};
-        const otherEntries = [];
-
+        html += `<div class="result-list">`;
         for (const item of topList) {
-            const originalLabel = item.label ? item.label : (labels && typeof item.idx !== 'undefined' && labels[item.idx] ? labels[item.idx] : (item.idx !== undefined ? `Class ${item.idx}` : 'Unknown'));
-            const score = item.score || 0;
-            const plantMatch = originalLabel.match(plantRegex);
-            if (plantMatch) {
-                const plantName = plantMatch[0].toLowerCase();
-                if (!plantEntries[plantName]) plantEntries[plantName] = {healthy: 0, diseased: 0, healthyLabels: [], diseaseLabels: []};
-                if (originalLabel.toLowerCase().includes('healthy')) {
-                    plantEntries[plantName].healthy += score;
-                    plantEntries[plantName].healthyLabels.push({label: originalLabel, score});
-                } else {
-                    plantEntries[plantName].diseased += score;
-                    plantEntries[plantName].diseaseLabels.push({label: originalLabel, score});
-                }
-            } else {
-                otherEntries.push({originalLabel, score});
-            }
-        }
-
-        const displayList = [];
-        for (const p of Object.keys(plantEntries)) {
-            const entry = plantEntries[p];
-            const healthyScore = entry.healthy || 0;
-            const diseasedScore = entry.diseased || 0;
-            if (healthyScore === 0 && diseasedScore === 0) continue;
-
-            if (healthyScore >= diseasedScore) {
-                const originalLabel = entry.healthyLabels.map(h => h.label).join('|');
-                displayList.push({displayLabel: 'Healthy', originalLabel, score: healthyScore, isProblem: false});
-            } else {
-                entry.diseaseLabels.sort((a,b) => b.score - a.score);
-                const topDiseaseLabel = entry.diseaseLabels[0] ? entry.diseaseLabels[0].label : (entry.diseaseLabels.map(d => d.label).join('|'));
-                const originalLabel = entry.diseaseLabels.map(d => d.label).join('|');
-                displayList.push({displayLabel: 'Diseased', originalLabel, score: diseasedScore, isProblem: true, adviceLabel: topDiseaseLabel});
-            }
-        }
-        for (const e of otherEntries) {
-            const isProblem = e.originalLabel.toLowerCase().includes('disease') || e.originalLabel.toLowerCase().includes('pest');
-            displayList.push({displayLabel: e.originalLabel, originalLabel: e.originalLabel, score: e.score, isProblem});
-        }
-
-        displayList.sort((a,b) => (b.score || 0) - (a.score || 0));
-
-        const top = displayList[0];
-        if (!top) {
-            html += '<p class="no-results">No clear detection. Please try another image.</p>';
-        } else {
-            const confidence = ((top.score || 0) * 100).toFixed(1);
-            const isProblem = top.isProblem;
-
-            html += `<div class="result-list">`;
+            const label = item.label ? item.label : (labels && typeof item.idx !== 'undefined' && labels[item.idx] ? labels[item.idx] : (item.idx !== undefined ? `Class ${item.idx}` : 'Unknown'));
+            const confidence = (item.score * 100).toFixed(1);
+            const isProblem = label.toLowerCase().includes('disease') || label.toLowerCase().includes('pest');
+            
             html += `
                 <div class="result-item ${isProblem ? 'problem' : 'healthy'}">
                     <div class="result-header">
                         <i class="bi ${isProblem ? 'bi-exclamation-triangle' : 'bi-check-circle'}"></i>
-                        <strong>${escapeHtml(top.displayLabel)}</strong>
+                        <strong>${escapeHtml(label)}</strong>
                     </div>
                     <div class="result-details">
                         <div class="confidence-bar">
@@ -3190,24 +2862,24 @@ function renderResults(topList) {
                     ${isProblem ? `
                     <div class="result-advice">
                         <i class="bi bi-lightbulb"></i>
-                        <span>${getAdviceForProblem(top.adviceLabel || top.originalLabel)}</span>
+                        <span>${getAdviceForProblem(label)}</span>
                     </div>
                     ` : ''}
                 </div>
             `;
-            html += `</div>`;
-
-            html += `
-                <div class="result-actions">
-                    <button class="btn btn-primary" onclick="logDetection('${encodeURIComponent(top.originalLabel || topList[0]?.label || '')}', ${top.score || topList[0]?.score || 0})">
-                        <i class="bi bi-save"></i> Log Detection
-                    </button>
-                    <button class="btn btn-outline" onclick="handleImageUpload(event)">
-                        <i class="bi bi-arrow-clockwise"></i> Analyze Another
-                    </button>
-                </div>
-            `;
         }
+        html += `</div>`;
+        
+        html += `
+            <div class="result-actions">
+                <button class="btn btn-primary" onclick="logDetection('${encodeURIComponent(topList[0]?.label || topList[0]?.idx || '')}', ${topList[0]?.score || 0})">
+                    <i class="bi bi-save"></i> Log Detection
+                </button>
+                <button class="btn btn-outline" onclick="handleImageUpload(event)">
+                    <i class="bi bi-arrow-clockwise"></i> Analyze Another
+                </button>
+            </div>
+        `;
     }
     
     html += `</div>`;
@@ -3281,9 +2953,13 @@ async function submitManualAnalysis() {
         planting_id: currentPlantingId
     };
     
+    // Save detection
     const detections = JSON.parse(localStorage.getItem('cropDetections') || '[]');
     detections.push(detection);
     localStorage.setItem('cropDetections', JSON.stringify(detections));
+    
+    // Save progress to Supabase
+    await saveUserProgressToSupabase();
     
     showManualAnalysisResult(pestLevel, diseaseType);
 }
@@ -3332,12 +3008,18 @@ function showManualAnalysisResult(pestLevel, diseaseType) {
                 <button class="btn btn-primary" onclick="getAIRecommendation(${currentPlantingId})">
                     <i class="bi bi-robot"></i> Get AI Advice
                 </button>
-                <button class="btn btn-outline" onclick="navigateToPage('analytics')">
+                <button class="btn btn-outline" onclick="navigateToPage('home')">
                     <i class="bi bi-graph-up"></i> View History
                 </button>
             </div>
         </div>
     `;
+}
+
+function displayNote(msg) {
+    const resultEl = document.getElementById('detectionResult');
+    if (!resultEl) return;
+    resultEl.innerHTML = `<div class="info-note">${msg}</div>`;
 }
 
 function escapeHtml(unsafe) {
@@ -3373,467 +3055,77 @@ async function logDetection(detectionLabelEncoded, detectionScore = 0) {
     }
 
     const detectionLabel = detectionLabelEncoded ? decodeURIComponent(detectionLabelEncoded) : 'Unknown';
+    
     try {
-        const response = await fetch(`${API_BASE_URL}/crop/${currentPlantingId}/image-analysis`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                detected_disease: detectionLabel,
-                detected_pests: null,
-                disease_confidence: detectionScore || 0,
-                overall_health_score: Math.max(0, 100 - (detectionScore ? (detectionScore * 100 * 0.5) : 25))
-            })
-        });
-
-        if (response.ok) {
-            showNotification('success', 'Detection Logged', 'Added to crop history.');
-        } else {
-            const logs = JSON.parse(localStorage.getItem('detectionLogs') || '[]');
-            logs.push({
-                planting_id: currentPlantingId,
-                detection_label: detectionLabel,
-                detection_score: detectionScore,
-                timestamp: new Date().toISOString(),
-                type: 'automatic'
-            });
-            localStorage.setItem('detectionLogs', JSON.stringify(logs));
-            showNotification('success', 'Detection Saved Locally', 'Added to local history.');
-        }
-
-        await getAIRecommendation(currentPlantingId);
-
-    } catch (error) {
-        console.error('Error logging detection:', error);
+        // Save detection to localStorage
         const logs = JSON.parse(localStorage.getItem('detectionLogs') || '[]');
         logs.push({
             planting_id: currentPlantingId,
             detection_label: detectionLabel,
             detection_score: detectionScore,
             timestamp: new Date().toISOString(),
-            type: 'automatic',
-            error: error.message
+            type: 'automatic'
         });
         localStorage.setItem('detectionLogs', JSON.stringify(logs));
-        showNotification('warning', 'Logged Locally', 'Saved detection locally due to network error.');
-    }
-}
+        
+        // Save progress to Supabase
+        await saveUserProgressToSupabase();
+        
+        showNotification('success', 'Detection Logged', 'Added to your crop history.');
+        await getAIRecommendation(currentPlantingId);
 
-// ============================
-// ANALYTICS FUNCTIONS
-// ============================
-
-async function loadAnalytics() {
-    const analyticsContainer = document.getElementById('analytics');
-    if (!analyticsContainer) return;
-    
-    if (userCrops.length === 0) {
-        analyticsContainer.innerHTML = `
-            <div class="empty-state">
-                <i class="bi bi-graph-up"></i>
-                <h4>No Data Available</h4>
-                <p>Plant a crop and add observations to see analytics</p>
-                <button class="btn btn-primary" onclick="navigateToPage('plants')">
-                    <i class="bi bi-flower1"></i> Plant a Crop
-                </button>
-            </div>
-        `;
-        return;
-    }
-    
-    analyticsContainer.innerHTML = `
-        <div class="loading-analytics">
-            <div class="spinner"></div>
-            <p>Loading analytics data...</p>
-        </div>
-    `;
-    
-    try {
-        const detections = JSON.parse(localStorage.getItem('cropDetections') || '[]');
-        const logs = JSON.parse(localStorage.getItem('detectionLogs') || '[]');
-        const observations = JSON.parse(localStorage.getItem('cropObservations') || '[]');
-        
-        let currentCropDetections, currentCropObservations;
-        if (selectedCrop) {
-            currentCropDetections = detections.filter(d => d.planting_id === selectedCrop.planting_id);
-            currentCropObservations = observations.filter(o => o.planting_id === selectedCrop.planting_id);
-        } else {
-            currentCropDetections = detections;
-            currentCropObservations = observations;
-        }
-        
-        analyticsContainer.innerHTML = generateAnalyticsHTML(currentCropDetections, logs, currentCropObservations);
-        
-        if (window.Chart) {
-            renderAnalyticsCharts(currentCropDetections, logs, currentCropObservations);
-        }
-        
     } catch (error) {
-        console.error('Error loading analytics:', error);
-        analyticsContainer.innerHTML = `
-            <div class="error-state">
-                <i class="bi bi-exclamation-triangle"></i>
-                <h4>Error Loading Analytics</h4>
-                <p>Could not load data. Please try again.</p>
-                <button class="btn btn-outline" onclick="loadAnalytics()">
-                    <i class="bi bi-arrow-clockwise"></i> Retry
-                </button>
-            </div>
-        `;
+        console.error('Error logging detection:', error);
+        showNotification('warning', 'Logged Locally', 'Saved detection locally.');
     }
 }
 
-function generateAnalyticsHTML(detections, logs, observations) {
-    const totalDetections = detections.length + logs.length + observations.length;
-    const pestDetections = detections.filter(d => d.pest_level !== 'none').length + 
-                          observations.filter(o => o.pest_level && o.pest_level !== 'low').length;
-    const diseaseDetections = detections.filter(d => d.disease !== 'none').length + 
-                             observations.filter(o => o.disease_observed).length;
-    const healthyDays = 30 - Math.min(totalDetections, 30);
-    
-    const cropName = selectedCrop ? selectedCrop.crop_type : 'All Crops';
-    
-    return `
-        <div class="analytics-container">
-            <div class="analytics-header">
-                <h3><i class="bi bi-graph-up"></i> Crop Analytics</h3>
-                <p>Insights for ${cropName}</p>
-                ${!selectedCrop ? '<p class="text-muted"><small>Showing data for all crops</small></p>' : ''}
-            </div>
-            
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-icon" style="background-color: #3498db">
-                        <i class="bi bi-clipboard-data"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h4>${totalDetections}</h4>
-                        <p>Total Observations</p>
-                    </div>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-icon" style="background-color: #e74c3c">
-                        <i class="bi bi-bug"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h4>${pestDetections}</h4>
-                        <p>Pest Detections</p>
-                    </div>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-icon" style="background-color: #f39c12">
-                        <i class="bi bi-droplet"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h4>${diseaseDetections}</h4>
-                        <p>Disease Cases</p>
-                    </div>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-icon" style="background-color: #2ecc71">
-                        <i class="bi bi-check-circle"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h4>${healthyDays}</h4>
-                        <p>Healthy Days</p>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="charts-container">
-                <div class="chart-wrapper">
-                    <h4><i class="bi bi-bar-chart"></i> Detection History</h4>
-                    <canvas id="detectionChart" width="400" height="200"></canvas>
-                </div>
-                
-                <div class="chart-wrapper">
-                    <h4><i class="bi bi-pie-chart"></i> Problem Distribution</h4>
-                    <canvas id="problemChart" width="400" height="200"></canvas>
-                </div>
-            </div>
-            
-            <div class="recent-activity">
-                <h4><i class="bi bi-clock-history"></i> Recent Activity</h4>
-                <div class="activity-list">
-                    ${generateActivityList(detections, logs, observations)}
-                </div>
-            </div>
-            
-            <div class="analytics-actions">
-                <button class="btn btn-primary" onclick="exportAnalyticsData()">
-                    <i class="bi bi-download"></i> Export Data
-                </button>
-                <button class="btn btn-outline" onclick="clearAnalyticsData()">
-                    <i class="bi bi-trash"></i> Clear History
-                </button>
-            </div>
-        </div>
-    `;
-}
-
-function generateActivityList(detections, logs, observations) {
-    const allActivities = [
-        ...detections.map(d => ({ ...d, type: 'manual_detection' })),
-        ...logs.map(l => ({ ...l, type: 'automatic_detection' })),
-        ...observations.map(o => ({ ...o, type: 'observation' }))
-    ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-     .slice(0, 10);
-    
-    if (allActivities.length === 0) {
-        return '<div class="no-activity">No activity recorded yet.</div>';
-    }
-    
-    return allActivities.map(activity => {
-        const date = new Date(activity.timestamp);
-        const timeAgo = getTimeAgo(date);
-        
-        let description = '';
-        let icon = 'bi-info-circle';
-        
-        if (activity.type === 'manual_detection') {
-            description = `Manual observation: ${activity.pest_level} pests, ${activity.disease} disease`;
-            icon = 'bi-eye';
-        } else if (activity.type === 'automatic_detection') {
-            description = 'Automatic image analysis completed';
-            icon = 'bi-camera';
-        } else if (activity.type === 'observation') {
-            description = `Observation: ${activity.notes?.substring(0, 50) || 'No notes'}`;
-            icon = 'bi-journal-text';
-        }
-        
-        return `
-            <div class="activity-item">
-                <div class="activity-icon">
-                    <i class="bi ${icon}"></i>
-                </div>
-                <div class="activity-content">
-                    <div class="activity-title">${description}</div>
-                    <div class="activity-time">${timeAgo}</div>
-                </div>
-            </div>
-        `;
-    }).join('');
-}
-
-function renderAnalyticsCharts(detections, logs, observations) {
-    const detectionCtx = document.getElementById('detectionChart')?.getContext('2d');
-    if (detectionCtx) {
-        const last30Days = Array.from({length: 30}, (_, i) => {
-            const date = new Date();
-            date.setDate(date.getDate() - (29 - i));
-            return date.toISOString().split('T')[0];
-        });
-        
-        const dailyCounts = last30Days.map(date => {
-            return detections.filter(d => 
-                d.timestamp && d.timestamp.startsWith(date)
-            ).length + observations.filter(o =>
-                o.timestamp && o.timestamp.startsWith(date)
-            ).length;
-        });
-        
-        new Chart(detectionCtx, {
-            type: 'line',
-            data: {
-                labels: last30Days.map(d => new Date(d).getDate()),
-                datasets: [{
-                    label: 'Daily Observations',
-                    data: dailyCounts,
-                    borderColor: '#3498db',
-                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
-                    tension: 0.4,
-                    fill: true
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: {
-                        display: false
-                    }
-                },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        title: {
-                            display: true,
-                            text: 'Number of Observations'
-                        }
-                    },
-                    x: {
-                        title: {
-                            display: true,
-                            text: 'Day of Month'
-                        }
-                    }
-                }
-            }
-        });
-    }
-    
-    const problemCtx = document.getElementById('problemChart')?.getContext('2d');
-    if (problemCtx) {
-        const pestCount = detections.filter(d => d.pest_level !== 'none').length + 
-                         observations.filter(o => o.pest_level && o.pest_level !== 'low').length;
-        const diseaseCount = detections.filter(d => d.disease !== 'none').length + 
-                           observations.filter(o => o.disease_observed).length;
-        const healthyCount = detections.length + observations.length - (pestCount + diseaseCount);
-        
-        new Chart(problemCtx, {
-            type: 'doughnut',
-            data: {
-                labels: ['Pest Issues', 'Disease Issues', 'Healthy'],
-                datasets: [{
-                    data: [pestCount, diseaseCount, healthyCount],
-                    backgroundColor: [
-                        '#e74c3c',
-                        '#f39c12',
-                        '#2ecc71'
-                    ]
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: {
-                        position: 'bottom'
-                    }
-                }
-            }
-        });
-    }
-}
-
-function getTimeAgo(date) {
-    const seconds = Math.floor((new Date() - date) / 1000);
-    
-    let interval = Math.floor(seconds / 31536000);
-    if (interval >= 1) return interval + ' year' + (interval === 1 ? '' : 's') + ' ago';
-    
-    interval = Math.floor(seconds / 2592000);
-    if (interval >= 1) return interval + ' month' + (interval === 1 ? '' : 's') + ' ago';
-    
-    interval = Math.floor(seconds / 86400);
-    if (interval >= 1) return interval + ' day' + (interval === 1 ? '' : 's') + ' ago';
-    
-    interval = Math.floor(seconds / 3600);
-    if (interval >= 1) return interval + ' hour' + (interval === 1 ? '' : 's') + ' ago';
-    
-    interval = Math.floor(seconds / 60);
-    if (interval >= 1) return interval + ' minute' + (interval === 1 ? '' : 's') + ' ago';
-    
-    return Math.floor(seconds) + ' second' + (seconds === 1 ? '' : 's') + ' ago';
-}
-
-function exportAnalyticsData() {
-    const detections = JSON.parse(localStorage.getItem('cropDetections') || '[]');
-    const logs = JSON.parse(localStorage.getItem('detectionLogs') || '[]');
-    const observations = JSON.parse(localStorage.getItem('cropObservations') || '[]');
-    
-    let exportData;
-    if (selectedCrop) {
-        const currentDetections = detections.filter(d => d.planting_id === selectedCrop.planting_id);
-        const currentObservations = observations.filter(o => o.planting_id === selectedCrop.planting_id);
-        
-        exportData = {
-            crop: selectedCrop.crop_type,
-            planting_id: selectedCrop.planting_id,
-            export_date: new Date().toISOString(),
-            detections: currentDetections,
-            observations: currentObservations,
-            automatic_logs: logs.filter(l => l.planting_id === selectedCrop.planting_id)
-        };
-    } else {
-        exportData = {
-            crop: 'All Crops',
-            export_date: new Date().toISOString(),
-            detections: detections,
-            observations: observations,
-            automatic_logs: logs,
-            user_crops: userCrops
-        };
-    }
-    
-    const dataStr = JSON.stringify(exportData, null, 2);
-    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
-    
-    const exportFileDefaultName = `crop_analytics_${selectedCrop ? selectedCrop.crop_type : 'all_crops'}_${new Date().toISOString().split('T')[0]}.json`;
-    
-    const linkElement = document.createElement('a');
-    linkElement.setAttribute('href', dataUri);
-    linkElement.setAttribute('download', exportFileDefaultName);
-    linkElement.click();
-    
-    showNotification('success', 'Data Exported', 'Analytics data downloaded as JSON.');
-}
-
-function clearAnalyticsData() {
-    if (confirm('Are you sure you want to clear analytics data? This cannot be undone.')) {
-        if (selectedCrop) {
-            const allDetections = JSON.parse(localStorage.getItem('cropDetections') || '[]');
-            const allObservations = JSON.parse(localStorage.getItem('cropObservations') || '[]');
-            
-            const filteredDetections = allDetections.filter(d => d.planting_id !== selectedCrop.planting_id);
-            const filteredObservations = allObservations.filter(o => o.planting_id !== selectedCrop.planting_id);
-            
-            localStorage.setItem('cropDetections', JSON.stringify(filteredDetections));
-            localStorage.setItem('cropObservations', JSON.stringify(filteredObservations));
-            
-            showNotification('info', 'Data Cleared', 'Analytics data has been removed for this crop.');
-        } else {
-            localStorage.removeItem('cropDetections');
-            localStorage.removeItem('cropObservations');
-            localStorage.removeItem('detectionLogs');
-            
-            showNotification('info', 'All Data Cleared', 'All analytics data has been removed.');
-        }
-        
-        loadAnalytics();
-    }
-}
-
-// ============================
+// ---------------------
 // QUICK ACTIONS
-// ============================
-
+// ---------------------
 function initializeQuickActions() {
     const quickActionsContainer = document.querySelector('.quick-actions');
     if (!quickActionsContainer) return;
     
     quickActionsContainer.innerHTML = `
         <div class="quick-actions-grid">
-            <div class="quick-action-card water" onclick="handleQuickAction('water')">
+            <div class="quick-action-card water" id="quickWater">
                 <i class="bi bi-droplet"></i>
                 <div class="action-title">Water</div>
                 <div class="action-desc">Log watering activity</div>
             </div>
-            <div class="quick-action-card fertilize" onclick="handleQuickAction('fertilize')">
+            <div class="quick-action-card fertilize" id="quickFertilize">
                 <i class="bi bi-flower1"></i>
                 <div class="action-title">Fertilize</div>
                 <div class="action-desc">Record fertilization</div>
             </div>
-            <div class="quick-action-card inspect" onclick="handleQuickAction('inspect')">
+            <div class="quick-action-card inspect" id="quickInspect">
                 <i class="bi bi-camera"></i>
                 <div class="action-title">Inspect</div>
                 <div class="action-desc">Upload crop image</div>
             </div>
-            <div class="quick-action-card note" onclick="handleQuickAction('note')">
+            <div class="quick-action-card note" id="quickNote">
                 <i class="bi bi-journal-text"></i>
                 <div class="action-title">Note</div>
                 <div class="action-desc">Add observation</div>
             </div>
-            <div class="quick-action-card harvest" onclick="handleQuickAction('harvest')">
+            <div class="quick-action-card harvest" id="quickHarvest">
                 <i class="bi bi-basket"></i>
                 <div class="action-title">Harvest</div>
                 <div class="action-desc">Mark as harvested</div>
             </div>
         </div>
     `;
+    
+    // Add event listeners
+    document.getElementById('quickWater').addEventListener('click', () => handleQuickAction('water'));
+    document.getElementById('quickFertilize').addEventListener('click', () => handleQuickAction('fertilize'));
+    document.getElementById('quickInspect').addEventListener('click', () => handleQuickAction('inspect'));
+    document.getElementById('quickNote').addEventListener('click', () => handleQuickAction('note'));
+    document.getElementById('quickHarvest').addEventListener('click', () => handleQuickAction('harvest'));
 }
 
-function handleQuickAction(action) {
+async function handleQuickAction(action) {
     if (!selectedCrop && action !== 'inspect') {
         showNotification('warning', 'No Crop Selected', 'Please select a crop first.');
         return;
@@ -3841,12 +3133,12 @@ function handleQuickAction(action) {
     
     switch(action) {
         case 'water':
-            logQuickAction('water', 'Watered crop as per schedule');
+            await logQuickAction('water', 'Watered crop as per schedule');
             showNotification('success', 'Watering Logged', 'Watering activity recorded.');
             break;
             
         case 'fertilize':
-            logQuickAction('fertilize', 'Applied fertilizer');
+            await logQuickAction('fertilize', 'Applied fertilizer');
             showNotification('success', 'Fertilization Logged', 'Fertilizer application recorded.');
             break;
             
@@ -3860,7 +3152,7 @@ function handleQuickAction(action) {
             
         case 'harvest':
             if (confirm('Are you ready to harvest this crop? This will mark it as completed.')) {
-                markAsHarvested();
+                await markAsHarvested();
             }
             break;
     }
@@ -3868,34 +3160,20 @@ function handleQuickAction(action) {
 
 async function logQuickAction(type, description) {
     if (!selectedCrop) return;
+    
     const action = {
         planting_id: selectedCrop.planting_id,
         type: type,
         description: description,
         timestamp: new Date().toISOString()
     };
-
-    const userId = currentUser ? currentUser.id : null;
-    if (userId && userId !== DEMO_USER_ID) {
-        try {
-            const resp = await fetch(`${API_BASE_URL}/user/${userId}/actions`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ action_type: 'quick_action', planting_id: action.planting_id, details: action })
-            });
-            if (resp.ok) {
-                showNotification('success', 'Action Logged', 'Quick action saved to your account.');
-                return;
-            }
-        } catch (e) {
-            console.warn('Failed to log quick action to server:', e.message);
-        }
-    }
-
+    
     const actions = JSON.parse(localStorage.getItem('quickActions') || '[]');
     actions.push(action);
     localStorage.setItem('quickActions', JSON.stringify(actions));
-    showNotification('warning', 'Logged Locally', 'Quick action saved locally (not synced).');
+    
+    // Save progress to Supabase
+    await saveUserProgressToSupabase();
 }
 
 function showQuickNoteModal() {
@@ -3905,23 +3183,28 @@ function showQuickNoteModal() {
         <div class="modal quick-note-modal">
             <div class="modal-header">
                 <h4><i class="bi bi-journal-text"></i> Add Quick Note</h4>
-                <button class="btn-close" onclick="this.closest('.modal-overlay').remove()">&times;</button>
+                <button class="btn-close" id="closeNoteModal">&times;</button>
             </div>
             <div class="modal-body">
                 <textarea id="quickNoteText" class="form-textarea" 
                           placeholder="Enter your observation note here..." rows="4"></textarea>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveQuickNote()">Save Note</button>
+                <button class="btn btn-outline" id="cancelNote">Cancel</button>
+                <button class="btn btn-primary" id="saveNote">Save Note</button>
             </div>
         </div>
     `;
     
     document.body.appendChild(modal);
+    
+    // Add event listeners
+    document.getElementById('closeNoteModal').addEventListener('click', () => modal.remove());
+    document.getElementById('cancelNote').addEventListener('click', () => modal.remove());
+    document.getElementById('saveNote').addEventListener('click', saveQuickNote);
 }
 
-function saveQuickNote() {
+async function saveQuickNote() {
     const noteText = document.getElementById('quickNoteText').value;
     if (!noteText.trim()) {
         alert('Please enter a note');
@@ -3938,18 +3221,20 @@ function saveQuickNote() {
     notes.push(note);
     localStorage.setItem('cropNotes', JSON.stringify(notes));
     
+    // Save progress to Supabase
+    await saveUserProgressToSupabase();
+    
     document.querySelector('.modal-overlay').remove();
-    showNotification('success', 'Note Saved', 'Observation note added successfully.');
+    showNotification('success', 'Note Saved', 'Observation note added to your account.');
 }
 
-function markAsHarvested() {
+async function markAsHarvested() {
     if (!selectedCrop) return;
     
     const cropIndex = userCrops.findIndex(c => c.planting_id === selectedCrop.planting_id);
     if (cropIndex !== -1) {
         userCrops[cropIndex].harvested = true;
         userCrops[cropIndex].harvest_date = new Date().toISOString();
-        localStorage.setItem('userCrops', JSON.stringify(userCrops));
     }
     
     userCrops = userCrops.filter(c => c.planting_id !== selectedCrop.planting_id);
@@ -3958,16 +3243,18 @@ function markAsHarvested() {
     selectedCrop = null;
     currentPlantingId = null;
     
+    // Save progress to Supabase
+    await saveUserProgressToSupabase();
+    
     updateDashboardWithAllCrops();
     navigateToPage('home');
     
     showNotification('success', 'Harvest Complete!', `${wasSelected.crop_type} has been harvested. Great work!`);
 }
 
-// ============================
+// ---------------------
 // HELPER FUNCTIONS
-// ============================
-
+// ---------------------
 function getActionIcon(action) {
     const iconMap = {
         'irrigate': 'bi-droplet',
@@ -4025,11 +3312,14 @@ function showNotification(type, title, message) {
             <div class="notification-title">${title}</div>
             <div class="notification-message">${message}</div>
         </div>
-        <button class="notification-close" onclick="this.parentElement.remove()">&times;</button>
+        <button class="notification-close">&times;</button>
     `;
     
     const container = document.getElementById('notificationContainer') || createNotificationContainer();
     container.appendChild(notification);
+    
+    // Add event listener to close button
+    notification.querySelector('.notification-close').addEventListener('click', () => notification.remove());
     
     setTimeout(() => {
         if (notification.parentElement) {
@@ -4056,511 +3346,34 @@ function createNotificationContainer() {
     return container;
 }
 
-// ============================
-// ADDITIONAL SUPABASE UTILITIES
-// ============================
-
-async function saveUserSettings(settings) {
-  if (!currentUser || currentUser.id === DEMO_USER_ID) return;
-
-  try {
-    const { error } = await supabase
-      .from('user_settings')
-      .upsert({
-        user_id: currentUser.id,
-        ...settings,
-        updated_at: new Date().toISOString()
-      });
-
-    if (error) throw error;
-    
-    console.log('User settings saved to Supabase');
-  } catch (error) {
-    console.error('Error saving user settings:', error);
-  }
+function formatDateForDisplay(dateString) {
+    const date = new Date(dateString);
+    return date.toLocaleDateString('en', { 
+        weekday: 'short', 
+        year: 'numeric', 
+        month: 'short', 
+        day: 'numeric' 
+    });
 }
 
-async function loadUserSettings() {
-  if (!currentUser || currentUser.id === DEMO_USER_ID) return null;
-
-  try {
-    const { data, error } = await supabase
-      .from('user_settings')
-      .select('*')
-      .eq('user_id', currentUser.id)
-      .single();
-
-    if (error) throw error;
-    
-    return data;
-  } catch (error) {
-    console.error('Error loading user settings:', error);
-    return null;
-  }
+function getDaysBetween(startDate, endDate) {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const diffTime = Math.abs(end - start);
+    return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 }
 
-async function getCropHistory(cropId) {
-  if (!currentUser || currentUser.id === DEMO_USER_ID) return [];
-
-  try {
-    const { data, error } = await supabase
-      .from('crop_progress')
-      .select('*')
-      .eq('crop_id', cropId)
-      .order('created_at', { ascending: true });
-
-    if (error) throw error;
-    
-    return data || [];
-  } catch (error) {
-    console.error('Error loading crop history:', error);
-    return [];
-  }
+function calculateProgress(startDate, totalDays) {
+    const daysElapsed = getDaysBetween(startDate, new Date());
+    const progress = (daysElapsed / totalDays) * 100;
+    return Math.min(100, Math.max(0, progress));
 }
 
-async function getCropObservations(cropId) {
-  if (!currentUser || currentUser.id === DEMO_USER_ID) return [];
-
-  try {
-    const { data, error } = await supabase
-      .from('crop_observations')
-      .select('*')
-      .eq('crop_id', cropId)
-      .order('created_at', { ascending: false });
-
-    if (error) throw error;
-    
-    return data || [];
-  } catch (error) {
-    console.error('Error loading crop observations:', error);
-    return [];
-  }
-}
-
-// ============================
-// DASHBOARD CSS STYLES
-// ============================
-const dashboardStyles = document.createElement('style');
-dashboardStyles.textContent = `
-    /* Compact Dashboard Styles */
-    .dashboard-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 20px;
-        padding-bottom: 15px;
-        border-bottom: 1px solid var(--border-color);
-    }
-    
-    .dashboard-title {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    
-    .dashboard-title h3 {
-        margin: 0;
-        font-size: 1.2rem;
-        font-weight: 600;
-    }
-    
-    .dashboard-title .badge {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 4px 10px;
-        border-radius: 12px;
-        font-size: 0.8rem;
-        font-weight: 600;
-    }
-    
-    .crops-grid.compact {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
-        gap: 16px;
-    }
-    
-    .dashboard-crop-card {
-        background: var(--bg-card);
-        border: 1px solid var(--border-color);
-        border-radius: 12px;
-        padding: 16px;
-        transition: all 0.3s ease;
-        cursor: pointer;
-    }
-    
-    .dashboard-crop-card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 12px var(--shadow-color);
-        border-color: #667eea;
-    }
-    
-    .dashboard-crop-card.selected {
-        border-color: #667eea;
-        background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-    }
-    
-    .crop-card-header {
-        display: flex;
-        align-items: center;
-        margin-bottom: 15px;
-        gap: 12px;
-    }
-    
-    .crop-icon {
-        width: 40px;
-        height: 40px;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        border-radius: 10px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        color: white;
-        font-size: 1.2rem;
-    }
-    
-    .crop-info {
-        flex: 1;
-    }
-    
-    .crop-info h4 {
-        margin: 0 0 4px 0;
-        font-size: 1rem;
-        font-weight: 600;
-    }
-    
-    .crop-meta {
-        display: flex;
-        gap: 8px;
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-    }
-    
-    .crop-stage {
-        padding: 2px 8px;
-        border-radius: 10px;
-        font-size: 0.7rem;
-        font-weight: 600;
-        text-transform: uppercase;
-    }
-    
-    .crop-stage.seedling { background: #e3f2fd; color: #1976d2; }
-    .crop-stage.vegetative { background: #e8f5e9; color: #2e7d32; }
-    .crop-stage.flowering { background: #fff3e0; color: #f57c00; }
-    .crop-stage.mature { background: #fce4ec; color: #c2185b; }
-    
-    .cloud-indicator {
-        color: #667eea;
-        font-size: 0.9rem;
-    }
-    
-    .crop-progress-compact {
-        margin: 15px 0;
-    }
-    
-    .progress-header {
-        display: flex;
-        justify-content: space-between;
-        margin-bottom: 6px;
-        font-size: 0.85rem;
-    }
-    
-    .progress-percent {
-        font-weight: 600;
-        color: #667eea;
-    }
-    
-    .progress-bar-compact {
-        height: 6px;
-        background: var(--bg-secondary);
-        border-radius: 3px;
-        overflow: hidden;
-    }
-    
-    .progress-fill-compact {
-        height: 100%;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        border-radius: 3px;
-        transition: width 0.5s ease;
-    }
-    
-    .crop-stats {
-        display: grid;
-        grid-template-columns: 1fr 1fr;
-        gap: 10px;
-        margin: 15px 0;
-        font-size: 0.8rem;
-    }
-    
-    .crop-stats .stat {
-        display: flex;
-        align-items: center;
-        gap: 6px;
-        color: var(--text-secondary);
-    }
-    
-    .crop-stats .stat i {
-        color: #667eea;
-    }
-    
-    .crop-actions-mini {
-        display: flex;
-        justify-content: flex-end;
-        gap: 8px;
-        padding-top: 10px;
-        border-top: 1px solid var(--border-color);
-    }
-    
-    .btn-icon {
-        width: 32px;
-        height: 32px;
-        border-radius: 8px;
-        border: 1px solid var(--border-color);
-        background: transparent;
-        color: var(--text-secondary);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        transition: all 0.2s ease;
-    }
-    
-    .btn-icon:hover {
-        background: var(--hover-bg);
-        color: var(--text-primary);
-    }
-    
-    /* Detail View Styles */
-    .crop-detail-view {
-        background: var(--bg-card);
-        border-radius: 12px;
-        padding: 20px;
-    }
-    
-    .detail-header {
-        display: flex;
-        align-items: center;
-        margin-bottom: 25px;
-        gap: 15px;
-    }
-    
-    .detail-title {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        flex: 1;
-    }
-    
-    .detail-title h3 {
-        margin: 0;
-        font-size: 1.3rem;
-    }
-    
-    .detail-title i {
-        font-size: 1.5rem;
-        color: #667eea;
-    }
-    
-    .cloud-badge {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 4px 12px;
-        border-radius: 12px;
-        font-size: 0.8rem;
-        font-weight: 600;
-    }
-    
-    .cloud-badge.local {
-        background: linear-gradient(135deg, #95a5a6 0%, #7f8c8d 100%);
-    }
-    
-    .progress-section-large {
-        background: var(--bg-secondary);
-        border-radius: 12px;
-        padding: 20px;
-        margin-bottom: 20px;
-    }
-    
-    .progress-header-large {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 15px;
-    }
-    
-    .progress-header-large h4 {
-        margin: 0;
-        font-size: 1.1rem;
-    }
-    
-    .progress-percent-large {
-        font-size: 1.5rem;
-        font-weight: 700;
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        -webkit-background-clip: text;
-        -webkit-text-fill-color: transparent;
-    }
-    
-    .progress-bar-large {
-        height: 10px;
-        background: var(--bg-primary);
-        border-radius: 5px;
-        overflow: hidden;
-        margin-bottom: 20px;
-    }
-    
-    .progress-fill-large {
-        height: 100%;
-        background: linear-gradient(90deg, #667eea 0%, #764ba2 100%);
-        border-radius: 5px;
-        transition: width 0.5s ease;
-    }
-    
-    .progress-stats {
-        display: grid;
-        grid-template-columns: repeat(4, 1fr);
-        gap: 15px;
-    }
-    
-    .progress-stat {
-        text-align: center;
-    }
-    
-    .progress-stat .stat-value {
-        font-size: 1.5rem;
-        font-weight: 700;
-        margin-bottom: 5px;
-    }
-    
-    .progress-stat .stat-label {
-        font-size: 0.8rem;
-        color: var(--text-secondary);
-    }
-    
-    .detail-timeline {
-        background: var(--bg-secondary);
-        border-radius: 12px;
-        padding: 20px;
-        margin-bottom: 20px;
-    }
-    
-    .timeline-compact .timeline-item {
-        display: flex;
-        align-items: center;
-        padding: 10px 0;
-        border-bottom: 1px solid var(--border-color);
-    }
-    
-    .timeline-compact .timeline-item:last-child {
-        border-bottom: none;
-    }
-    
-    .timeline-compact .timeline-date {
-        width: 80px;
-        font-weight: 600;
-        color: #667eea;
-    }
-    
-    .timeline-compact .timeline-content strong {
-        display: block;
-        margin-bottom: 4px;
-    }
-    
-    .timeline-compact .timeline-content p {
-        margin: 0;
-        font-size: 0.9rem;
-        color: var(--text-secondary);
-    }
-    
-    .detail-tasks {
-        background: var(--bg-secondary);
-        border-radius: 12px;
-        padding: 20px;
-    }
-    
-    .tasks-header {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 15px;
-    }
-    
-    .tasks-header h4 {
-        margin: 0;
-        font-size: 1.1rem;
-    }
-    
-    .tasks-list {
-        display: flex;
-        flex-direction: column;
-        gap: 10px;
-    }
-    
-    .cloud-sync-badge {
-        background: #2ecc71;
-        color: white;
-        padding: 2px 8px;
-        border-radius: 10px;
-        font-size: 0.7rem;
-        margin-left: 5px;
-    }
-    
-    /* Theme Toggle Button */
-    .theme-toggle {
-        width: 40px;
-        height: 40px;
-        border-radius: 50%;
-        border: none;
-        background: var(--bg-secondary);
-        color: var(--text-primary);
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        cursor: pointer;
-        transition: all 0.3s ease;
-    }
-    
-    .theme-toggle:hover {
-        transform: rotate(15deg);
-        background: var(--hover-bg);
-    }
-    
-    /* Empty State */
-    .empty-state {
-        text-align: center;
-        padding: 40px 20px;
-    }
-    
-    .empty-state-icon {
-        width: 80px;
-        height: 80px;
-        background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin: 0 auto 20px;
-        color: #667eea;
-        font-size: 2rem;
-    }
-    
-    .empty-state h4 {
-        margin: 0 0 10px 0;
-        font-size: 1.2rem;
-        font-weight: 600;
-    }
-    
-    .empty-state p {
-        color: var(--text-secondary);
-        margin-bottom: 20px;
-    }
-    
-    /* Dark mode adjustments */
-    .dark-mode .crop-stage.seedling { background: rgba(25, 118, 210, 0.2); color: #90caf9; }
-    .dark-mode .crop-stage.vegetative { background: rgba(46, 125, 50, 0.2); color: #a5d6a7; }
-    .dark-mode .crop-stage.flowering { background: rgba(245, 124, 0, 0.2); color: #ffcc80; }
-    .dark-mode .crop-stage.mature { background: rgba(194, 24, 91, 0.2); color: #f48fb1; }
-    
-    /* Model badges for dark mode */
+// ---------------------
+// ADD CSS FOR MODEL BADGES
+// ---------------------
+const modelStyles = document.createElement('style');
+modelStyles.textContent = `
     .model-badge {
         background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
@@ -4585,11 +3398,6 @@ dashboardStyles.textContent = `
         margin-top: 4px;
     }
     
-    .dark-mode .model-badge-small {
-        background: rgba(25, 118, 210, 0.2);
-        color: #90caf9;
-    }
-    
     .model-badge .bi {
         font-size: 10px;
     }
@@ -4607,12 +3415,7 @@ dashboardStyles.textContent = `
     .detail-header .model-badge {
         background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
     }
-    
-    .svm-badge {
-        background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
-        color: white;
-    }
 `;
-document.head.appendChild(dashboardStyles);
+document.head.appendChild(modelStyles);
 
-console.log('Smart Crop System ready! (With Dark/Light Mode & Improved Dashboard)');
+console.log('Smart Crop System ready! (With Supabase User Progress)');
