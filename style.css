@@ -398,6 +398,95 @@ body {
     margin-bottom: 25px;
 }
 
+/* ==========================
+   Signup page styles
+   ========================== */
+
+.signup-container {
+    max-width: 400px;
+    margin: 80px auto 50px auto; /* leave space for fixed top bar */
+    padding: 30px;
+    background: #fff;
+    border-radius: 10px;
+    box-shadow: 0 0 20px rgba(0,0,0,0.06);
+}
+
+.signup-header {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.signup-header h2 {
+    color: #2c3e50;
+    margin-bottom: 6px;
+}
+
+.signup-header p {
+    color: #7f8c8d;
+    font-size: 14px;
+}
+
+.signup-form .form-group {
+    margin-bottom: 15px;
+}
+
+.signup-form label {
+    display: block;
+    margin-bottom: 6px;
+    color: #2c3e50;
+    font-weight: 500;
+}
+
+.signup-form input {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    font-size: 15px;
+    transition: border-color 0.2s;
+}
+
+.signup-form input:focus {
+    border-color: #3498db;
+    outline: none;
+    box-shadow: 0 0 0 3px rgba(52,152,219,0.08);
+}
+
+#signupBtn {
+    width: 100%;
+    padding: 12px;
+    background: #3498db;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+
+#signupBtn:hover { background: #2980b9; }
+#signupBtn:disabled { background: #95a5a6; cursor: not-allowed; }
+
+#success_msg {
+    background: #d4edda;
+    color: #155724;
+    padding: 10px;
+    border-radius: 5px;
+    margin-bottom: 12px;
+    display: none;
+    font-size: 14px;
+    text-align: center;
+}
+
+.login-link { text-align: center; margin-top: 12px; color: #7f8c8d; font-size: 14px; }
+.login-link a { color: #3498db; text-decoration: none; font-weight: 500; }
+.login-link a:hover { text-decoration: underline; }
+
+.password-strength { height: 6px; background: #eee; border-radius: 4px; margin-top: 6px; overflow: hidden; }
+.password-strength-bar { height: 100%; width: 0%; background: #e74c3c; transition: width 0.3s, background 0.3s; }
+
+
 .location-options {
     display: flex;
     flex-direction: column;

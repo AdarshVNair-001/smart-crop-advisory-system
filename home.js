@@ -1,12 +1,12 @@
 // ============================================
-// home.js — Smart Crop System (No Login Required for Plant Selection)
+// home.js — Smart Crop System (With Supabase User Progress)
 // ============================================
 
 // Global variables
 let userLocation = null;
 let selectedCrop = null;
 let currentPage = 'home';
-let currentWeatherData = null; // Store weather data globally
+let currentWeatherData = null;
 const API_BASE_URL = 'http://localhost:5000/api';
 
 // Available crops data (matching database)
@@ -19,20 +19,27 @@ const crops = [
     { id: 6, name: 'Soybean', icon: 'bi-flower3', season: 'Monsoon', duration: 85 }
 ];
 
-// Current user and planting (optional)
+// Current user and planting
 let currentUser = null;
 let currentPlantingId = null;
 let progressUpdateInterval = null;
 
+// UI control flags
+let highlightedPlantingId = null; // for clicking card highlight only (does not open detail)
+let showTasksAndProgress = false; // main dashboard tasks/progress hidden by default
+
+
 // Demo user ID (for when not logged in)
-const DEMO_USER_ID = 999;
+const DEMO_USER_ID = 'demo-user-999';
 
 // Global variables for multiple crops
-let userCrops = []; // Array to store multiple crops
+let userCrops = [];
 
-// ---------------------
+// Supabase configuration
+const supabaseUrl = "https://alezsadxhbqozzfxzios.supabase.co";
+const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsZXpzYWR4aGJxb3p6Znh6aW9zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4OTkyNDMsImV4cCI6MjA4MjQ3NTI0M30.G4fU1jYvZSxuE0fVbAkKe-2WPgBKCe5lwieUyKico0I";
+
 // MODEL CONFIG & GLOBALS
-// ---------------------
 const MODEL_CONFIG = {
   tfjsModelUrl: './models/tfjs/model.json',
   onnxModelUrl: './models/model.onnx',
@@ -41,10 +48,33 @@ const MODEL_CONFIG = {
   backendPreference: ['tfjs', 'onnx']
 };
 
+const ML_MODELS = {
+  svm: './models/svm_decision.pkl',
+  svm_features: './models/svm_feature_names.pkl',
+  svm_scaler: './models/svm_scaler.pkl',
+  decision_tree: './models/dt_task.pkl',
+  dt_features: './models/dt_feature_names.pkl',
+  dt_task_encoder: './models/task_encoders.pkl',
+  random_forest: './models/rf_fertilizer.pkl',
+  rf_features: './models/rf_feature_names.pkl',
+  fertilizer_encoder: './models/fertilizer_encoder.pkl'
+};
+
 let tfModel = null;
 let onnxSession = null;
 let labels = null;
 let modelLoaded = false;
+
+// ML Models
+let svmModel = null;
+let svmScaler = null;
+let svmFeatures = null;
+let decisionTreeModel = null;
+let dtFeatures = null;
+let dtTaskEncoder = null;
+let randomForestModel = null;
+let rfFeatures = null;
+let fertilizerEncoder = null;
 
 const previewCanvas = document.createElement('canvas');
 previewCanvas.id = 'previewCanvas';
@@ -53,6 +83,15 @@ previewCanvas.height = MODEL_CONFIG.inputSize;
 previewCanvas.style = 'display:none;';
 document.body.appendChild(previewCanvas);
 const previewCtx = previewCanvas.getContext('2d');
+
+// Expose functions to global scope
+window.navigateToPage = navigateToPage;
+window.selectCropForDetail = selectCropForDetail;
+window.viewCropDetails = viewCropDetails;
+window.removeCrop = removeCrop;
+window.showAllCrops = showAllCrops;
+window.copyFertilizerInfo = copyFertilizerInfo;
+window.findAlternative = findAlternative;
 
 // ---------------------
 // INITIALIZATION
@@ -65,39 +104,55 @@ document.addEventListener('DOMContentLoaded', function() {
 async function initializeApp() {
     console.log('Initializing app...');
     
-    // Create navigation overlay for mobile
-    createNavOverlay();
-    
-    // Auto-create demo user (no login required)
-    currentUser = {
-        id: DEMO_USER_ID,
-        username: 'Demo User',
-        email: 'demo@smartcrop.com'
-    };
+    // Initialize Supabase
+    if (window.supabase) {
+        supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
+        
+        // Check for existing session
+        const { data: { session } } = await supabase.auth.getSession();
+        
+        if (session) {
+            console.log('User session found:', session.user.email);
+            currentUser = {
+                id: session.user.id,
+                username: session.user.user_metadata?.username || session.user.email,
+                email: session.user.email
+            };
+            
+            // Load user progress from Supabase
+            await loadUserProgressFromSupabase();
+        } else {
+            // No session, use demo mode
+            currentUser = {
+                id: DEMO_USER_ID,
+                username: 'Demo User',
+                email: 'demo@smartcrop.com'
+            };
+            console.log('Using demo user mode');
+        }
+    } else {
+        // Supabase not available, use demo mode
+        currentUser = {
+            id: DEMO_USER_ID,
+            username: 'Demo User',
+            email: 'demo@smartcrop.com'
+        };
+        console.log('Supabase not available, using demo mode');
+    }
     
     updateUserDisplay();
     
-    // Load ALL previously planted crops from localStorage
-    await loadAllUserCrops();
-    
     // Check location
-    const savedLocation = localStorage.getItem('userLocation');
-    if (savedLocation) {
-        try {
-            userLocation = JSON.parse(savedLocation);
-            updateLocationDisplay();
-            fetchWeatherDataFromAPI();
-            hideLocationModal();
-        } catch (error) {
-            showLocationModal();
-        }
-    } else {
-        showLocationModal();
-    }
-
+    await loadUserLocation();
+    
     setupEventListeners();
     initializePlantsGrid();
-    await loadModel();
+    
+    // Load models
+    await Promise.all([
+        loadModel(),
+        loadMLModels()
+    ]);
     
     // Initialize navigation state
     initializeNavigation();
@@ -105,14 +160,373 @@ async function initializeApp() {
     // Initialize quick actions
     initializeQuickActions();
     
-    // Hide login modal on startup
-    hideLoginModal();
-    
     console.log('App initialization complete');
 }
 
 // ---------------------
-// FERTILIZER RECOMMENDATION SYSTEM - SIMPLIFIED
+// LOAD ML MODELS
+// ---------------------
+async function loadMLModels() {
+    console.log('Loading ML models...');
+    
+    try {
+        console.log('ML models will be loaded via API endpoints');
+        await testMLModelEndpoints();
+    } catch (error) {
+        console.error('Error initializing ML models:', error);
+        console.log('ML models will be used via API calls');
+    }
+}
+
+async function testMLModelEndpoints() {
+    try {
+        const fertResponse = await fetch(`${API_BASE_URL}/test-models`, {
+            method: 'GET'
+        });
+        
+        if (fertResponse.ok) {
+            const data = await fertResponse.json();
+            console.log('ML models API test:', data.message || 'Ready');
+        }
+    } catch (error) {
+        console.log('ML models API not available, using fallback methods');
+    }
+}
+
+// ---------------------
+// AUTHENTICATION FUNCTIONS
+// ---------------------
+async function loginUser(email, password) {
+    try {
+        if (!supabase) {
+            showNotification('error', 'Login Error', 'Authentication service not available');
+            return false;
+        }
+        
+        const { data, error } = await supabase.auth.signInWithPassword({
+            email: email,
+            password: password
+        });
+        
+        if (error) {
+            showNotification('error', 'Login Failed', error.message);
+            return false;
+        }
+        
+        if (data.user) {
+            currentUser = {
+                id: data.user.id,
+                username: data.user.user_metadata?.username || data.user.email,
+                email: data.user.email
+            };
+            
+            // Save user to localStorage for persistence
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            
+            // Migrate demo data to user account
+            await migrateDemoDataToUser();
+            
+            // Load user progress from Supabase
+            await loadUserProgressFromSupabase();
+            
+            updateUserDisplay();
+            showNotification('success', 'Login Successful', `Welcome back, ${currentUser.username}!`);
+            return true;
+        }
+    } catch (error) {
+        console.error('Login error:', error);
+        showNotification('error', 'Login Error', 'An unexpected error occurred');
+    }
+    
+    return false;
+}
+
+async function signupUser(name, email, password) {
+    try {
+        if (!supabase) {
+            showNotification('error', 'Signup Error', 'Authentication service not available');
+            return false;
+        }
+        
+        const { data, error } = await supabase.auth.signUp({
+            email: email,
+            password: password,
+            options: {
+                data: {
+                    username: name
+                }
+            }
+        });
+        
+        if (error) {
+            showNotification('error', 'Signup Failed', error.message);
+            return false;
+        }
+        
+        if (data.user) {
+            currentUser = {
+                id: data.user.id,
+                username: name,
+                email: data.user.email
+            };
+            
+            // Save user to localStorage
+            localStorage.setItem('currentUser', JSON.stringify(currentUser));
+            
+            // Create user progress record in Supabase
+            await createUserProgressRecord();
+            
+            updateUserDisplay();
+            showNotification('success', 'Signup Successful', `Welcome ${name}!`);
+            return true;
+        }
+    } catch (error) {
+        console.error('Signup error:', error);
+        showNotification('error', 'Signup Error', 'An unexpected error occurred');
+    }
+    
+    return false;
+}
+
+async function logoutUser() {
+    try {
+        // Save current progress before logging out
+        await saveUserProgressToSupabase();
+        
+        // Sign out from Supabase
+        if (supabase) {
+            await supabase.auth.signOut();
+        }
+        
+        // Clear user data
+        currentUser = null;
+        currentPlantingId = null;
+        userCrops = [];
+        localStorage.removeItem('currentUser');
+        
+        // Redirect to landing page
+        window.location.href = 'index.html';
+        
+    } catch (error) {
+        console.error('Logout error:', error);
+        showNotification('error', 'Logout Failed', 'An error occurred during logout');
+    }
+}
+
+// ---------------------
+// USER PROGRESS MANAGEMENT
+// ---------------------
+async function createUserProgressRecord() {
+    if (!supabase || !currentUser || currentUser.id === DEMO_USER_ID) return;
+    
+    try {
+        const { error } = await supabase
+            .from('user_progress')
+            .upsert({
+                user_id: currentUser.id,
+                progress_data: {
+                    userCrops: [],
+                    location: null,
+                    detections: [],
+                    observations: [],
+                    created_at: new Date().toISOString()
+                },
+                updated_at: new Date().toISOString()
+            }, {
+                onConflict: 'user_id'
+            });
+        
+        if (error) {
+            console.error('Error creating user progress record:', error);
+        }
+    } catch (error) {
+        console.error('Error creating progress record:', error);
+    }
+}
+
+async function loadUserProgressFromSupabase() {
+    if (!supabase || !currentUser || currentUser.id === DEMO_USER_ID) return;
+    
+    try {
+        const { data, error } = await supabase
+            .from('user_progress')
+            .select('progress_data')
+            .eq('user_id', currentUser.id)
+            .single();
+        
+        if (!error && data && data.progress_data) {
+            // Load crops
+            if (data.progress_data.userCrops) {
+                userCrops = data.progress_data.userCrops;
+            }
+            
+            // Load location
+            if (data.progress_data.location) {
+                userLocation = data.progress_data.location;
+                updateLocationDisplay();
+                fetchWeatherDataFromAPI();
+                hideLocationModal();
+            } else {
+                showLocationModal();
+            }
+            
+            // Update dashboard
+            updateDashboardWithAllCrops();
+            console.log('User progress loaded from Supabase');
+        } else {
+            // No progress found, load from localStorage as fallback
+            await loadUserProgressFromLocalStorage();
+        }
+    } catch (error) {
+        console.error('Error loading user progress:', error);
+        await loadUserProgressFromLocalStorage();
+    }
+}
+
+async function saveUserProgressToSupabase() {
+    if (!supabase || !currentUser || currentUser.id === DEMO_USER_ID) return;
+    
+    try {
+        const progressData = {
+            userCrops: userCrops,
+            location: userLocation,
+            detections: JSON.parse(localStorage.getItem('cropDetections') || '[]'),
+            observations: JSON.parse(localStorage.getItem('cropObservations') || '[]'),
+            task_completions: JSON.parse(localStorage.getItem('taskCompletions') || '{}'),
+            updated_at: new Date().toISOString()
+        };
+        
+        const { error } = await supabase
+            .from('user_progress')
+            .upsert({
+                user_id: currentUser.id,
+                progress_data: progressData,
+                updated_at: new Date().toISOString()
+            }, {
+                onConflict: 'user_id'
+            });
+        
+        if (error) {
+            console.error('Error saving user progress:', error);
+            // Fallback to localStorage
+            await saveUserProgressToLocalStorage();
+        } else {
+            console.log('User progress saved to Supabase');
+        }
+    } catch (error) {
+        console.error('Error saving progress:', error);
+        await saveUserProgressToLocalStorage();
+    }
+}
+
+async function loadUserProgressFromLocalStorage() {
+    // Load crops
+    const savedCrops = localStorage.getItem('userCrops');
+    if (savedCrops) {
+        userCrops = JSON.parse(savedCrops);
+    }
+    
+    // Load location
+    const savedLocation = localStorage.getItem('userLocation');
+    if (savedLocation) {
+        userLocation = JSON.parse(savedLocation);
+        updateLocationDisplay();
+        fetchWeatherDataFromAPI();
+        hideLocationModal();
+    } else {
+        showLocationModal();
+    }
+    
+    updateDashboardWithAllCrops();
+    console.log('User progress loaded from localStorage');
+}
+
+async function saveUserProgressToLocalStorage() {
+    localStorage.setItem('userCrops', JSON.stringify(userCrops));
+    if (userLocation) {
+        localStorage.setItem('userLocation', JSON.stringify(userLocation));
+    }
+}
+
+async function migrateDemoDataToUser() {
+    if (!supabase || !currentUser || currentUser.id === DEMO_USER_ID) return;
+    
+    // Get demo data from localStorage
+    const demoCrops = localStorage.getItem('userCrops');
+    const demoLocation = localStorage.getItem('userLocation');
+    const demoDetections = localStorage.getItem('cropDetections');
+    const demoObservations = localStorage.getItem('cropObservations');
+    
+    if (demoCrops || demoLocation || demoDetections || demoObservations) {
+        try {
+            const progressData = {
+                userCrops: demoCrops ? JSON.parse(demoCrops) : [],
+                location: demoLocation ? JSON.parse(demoLocation) : null,
+                detections: demoDetections ? JSON.parse(demoDetections) : [],
+                observations: demoObservations ? JSON.parse(demoObservations) : [],
+                migrated_at: new Date().toISOString()
+            };
+            
+            // Save to Supabase
+            const { error } = await supabase
+                .from('user_progress')
+                .upsert({
+                    user_id: currentUser.id,
+                    progress_data: progressData,
+                    updated_at: new Date().toISOString()
+                }, {
+                    onConflict: 'user_id'
+                });
+            
+            if (!error) {
+                // Clear demo data from localStorage
+                localStorage.removeItem('userCrops');
+                localStorage.removeItem('userLocation');
+                localStorage.removeItem('cropDetections');
+                localStorage.removeItem('cropObservations');
+                
+                // Update local variables
+                userCrops = progressData.userCrops;
+                userLocation = progressData.location;
+                
+                console.log('Demo data migrated to user account');
+                showNotification('success', 'Data Migrated', 'Your demo data has been transferred to your account.');
+            }
+        } catch (error) {
+            console.error('Error migrating demo data:', error);
+        }
+    }
+}
+
+// ---------------------
+// LOAD USER LOCATION
+// ---------------------
+async function loadUserLocation() {
+    if (currentUser.id === DEMO_USER_ID) {
+        // For demo user, check localStorage
+        const savedLocation = localStorage.getItem('userLocation');
+        if (savedLocation) {
+            try {
+                userLocation = JSON.parse(savedLocation);
+                updateLocationDisplay();
+                fetchWeatherDataFromAPI();
+                hideLocationModal();
+            } catch (error) {
+                showLocationModal();
+            }
+        } else {
+            showLocationModal();
+        }
+    } else {
+        // For logged-in users, location is loaded with progress
+        if (!userLocation) {
+            showLocationModal();
+        }
+    }
+}
+
+// ---------------------
+// FERTILIZER RECOMMENDATION WITH RANDOM FOREST
 // ---------------------
 function loadFertilizerPage() {
     console.log('Loading fertilizer recommendation page');
@@ -153,8 +567,8 @@ function loadFertilizerPage() {
         soilTypeSelect.appendChild(opt);
     });
 
-    // Button action
-    btn.onclick = function() {
+    // Button action - Use Random Forest model via API
+    btn.onclick = async function() {
         const crop = cropSelect.value;
         const soilType = soilTypeSelect.value;
         
@@ -163,19 +577,70 @@ function loadFertilizerPage() {
             return;
         }
         
-        // Get fertilizer recommendation based on crop and soil type
-        const fertilizerName = getBestFertilizerForCropAndSoil(crop, soilType);
+        // Show loading state
+        results.innerHTML = `
+            <div class="loading-analysis">
+                <div class="spinner"></div>
+                <p>Analyzing with Random Forest model...</p>
+            </div>
+        `;
         
-        // Display the result
-        displayFertilizerResult(crop, soilType, fertilizerName);
+        try {
+            // Try to get recommendation from Random Forest model via API
+            const fertilizerName = await getFertilizerFromRandomForest(crop, soilType);
+            
+            // Display the result
+            displayFertilizerResult(crop, soilType, fertilizerName);
+            
+        } catch (error) {
+            console.error('Random Forest API error:', error);
+            // Fallback to rule-based system
+            const fertilizerName = getBestFertilizerForCropAndSoil(crop, soilType);
+            displayFertilizerResult(crop, soilType, fertilizerName);
+        }
     };
 
     // Clear previous results
-    results.innerHTML = '<p>Select crop type and soil type to get the best fertilizer recommendation.</p>';
+    results.innerHTML = '<p>Select crop type and soil type to get the best fertilizer recommendation (using Random Forest model).</p>';
+}
+
+async function getFertilizerFromRandomForest(cropType, soilType) {
+    try {
+        const response = await fetch(`${API_BASE_URL}/predict-fertilizer`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                crop_type: cropType,
+                soil_type: soilType,
+                temperature: currentWeatherData?.current?.temperature || 25,
+                humidity: currentWeatherData?.current?.humidity || 60,
+                rainfall: currentWeatherData?.current?.rainfall || 0,
+                ph_level: 6.5,
+                nitrogen: 50,
+                phosphorus: 30,
+                potassium: 40
+            })
+        });
+        
+        if (response.ok) {
+            const data = await response.json();
+            if (data.fertilizer) {
+                console.log('Random Forest prediction:', data);
+                return data.fertilizer;
+            }
+        }
+        
+        return getBestFertilizerForCropAndSoil(cropType, soilType);
+        
+    } catch (error) {
+        console.error('Random Forest API call failed:', error);
+        return getBestFertilizerForCropAndSoil(cropType, soilType);
+    }
 }
 
 function getBestFertilizerForCropAndSoil(cropType, soilType) {
-    // Map of best fertilizers for each crop-soil combination based on CSV data
     const fertilizerMatrix = {
         'Wheat': {
             'red': 'Diammonium Phosphate (DAP 18-46-0)',
@@ -245,12 +710,10 @@ function getBestFertilizerForCropAndSoil(cropType, soilType) {
         }
     };
     
-    // Return the fertilizer name based on crop and soil type
     if (fertilizerMatrix[cropType] && fertilizerMatrix[cropType][soilType]) {
         return fertilizerMatrix[cropType][soilType];
     }
     
-    // Fallback: Get first available fertilizer for the crop
     return getFirstFertilizerForCrop(cropType);
 }
 
@@ -294,6 +757,7 @@ function displayFertilizerResult(crop, soilType, fertilizerName) {
                 <div class="result-context">
                     <span class="context-item"><i class="bi bi-flower1"></i> ${crop}</span>
                     <span class="context-item"><i class="bi bi-geo-alt"></i> ${soilDisplayName}</span>
+                    <span class="context-item"><i class="bi bi-diagram-3"></i> Random Forest Model</span>
                 </div>
             </div>
             
@@ -369,7 +833,6 @@ function displayFertilizerResult(crop, soilType, fertilizerName) {
 
 function getFertilizerDetails(cropType, fertilizerName) {
     const fertilizerDetailsMap = {
-        // Wheat fertilizers
         'Urea (46% N)': {
             form: 'Granular',
             targetNutrient: 'Nitrogen (N)',
@@ -406,16 +869,6 @@ function getFertilizerDetails(cropType, fertilizerName) {
             remarks: 'Use based on soil test recommendations.',
             recommendation: 'Balanced nutrition for alluvial and loamy soils'
         },
-        // Rice fertilizers
-        'Urea (46% N)': {
-            form: 'Granular',
-            targetNutrient: 'Nitrogen (N)',
-            applicationRate: '80-160 kg/ha',
-            stage: 'Split: basal + tillering + panicle initiation',
-            frequency: '2-3 applications',
-            remarks: 'Top-dress in splits to reduce volatilization in flooded rice.',
-            recommendation: 'Standard nitrogen source for flooded rice cultivation'
-        },
         'Ammonium Sulfate': {
             form: 'Granular',
             targetNutrient: 'Nitrogen & Sulfur',
@@ -434,7 +887,6 @@ function getFertilizerDetails(cropType, fertilizerName) {
             remarks: 'Use based on soil test to support early growth.',
             recommendation: 'High phosphorus formula ideal for alluvial soils'
         },
-        // Tomato fertilizers
         'Calcium Nitrate (Ca(NO3)2)': {
             form: 'Granular / Soluble',
             targetNutrient: 'Calcium & Nitrogen',
@@ -453,7 +905,6 @@ function getFertilizerDetails(cropType, fertilizerName) {
             remarks: 'Improves fruit quality and shelf life.',
             recommendation: 'Ideal for potassium-deficient black soils'
         },
-        // Maize fertilizers
         'Compound NPK (e.g., 16-16-16)': {
             form: 'Granular',
             targetNutrient: 'Balanced NPK',
@@ -463,7 +914,6 @@ function getFertilizerDetails(cropType, fertilizerName) {
             remarks: 'Use based on soil test recommendations.',
             recommendation: 'Balanced nutrition for maize in alluvial soils'
         },
-        // Potato fertilizers
         'NPK 14-35-14 (high P)': {
             form: 'Granular',
             targetNutrient: 'Higher Phosphorus for tuber initiation',
@@ -473,7 +923,6 @@ function getFertilizerDetails(cropType, fertilizerName) {
             remarks: 'Promotes tuber development.',
             recommendation: 'High phosphorus formula ideal for potato in red soils'
         },
-        // Soybean fertilizers
         'Rhizobium Inoculant (biofertilizer)': {
             form: 'Powder/liquid for seed coating',
             targetNutrient: 'Biological N fixation support',
@@ -487,7 +936,7 @@ function getFertilizerDetails(cropType, fertilizerName) {
     
     return fertilizerDetailsMap[fertilizerName] || {
         form: 'Granular',
-        recommendation: `Recommended for ${cropType} in ${soilType} soils based on local agricultural practices.`
+        recommendation: `Recommended for ${cropType} in ${soilType} soils based on Random Forest prediction.`
     };
 }
 
@@ -520,44 +969,135 @@ function findAlternative(crop, soilType) {
 }
 
 // ---------------------
-// LOAD ALL USER CROPS
+// GET TASKS FROM DECISION TREE
 // ---------------------
-async function loadAllUserCrops() {
+async function getTasksFromDecisionTree(crop, daysElapsed, growthStage) {
+    if (!crop || !selectedCrop) return null;
+    
     try {
-        const userId = currentUser ? currentUser.id : DEMO_USER_ID;
-        
-        const response = await fetch(`${API_BASE_URL}/user/${userId}/crops`);
+        const response = await fetch(`${API_BASE_URL}/predict-tasks`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                crop_type: crop.name || selectedCrop.crop_type,
+                days_elapsed: daysElapsed,
+                growth_stage: growthStage,
+                temperature: currentWeatherData?.current?.temperature || 25,
+                humidity: currentWeatherData?.current?.humidity || 60,
+                rainfall: currentWeatherData?.current?.rainfall || 0,
+                soil_moisture: 50,
+                pest_level: 'low',
+                disease_present: 0
+            })
+        });
         
         if (response.ok) {
             const data = await response.json();
-            if (!data.error) {
-                userCrops = data.crops || [];
-                localStorage.setItem('userCrops', JSON.stringify(userCrops));
-                updateDashboardWithAllCrops();
-                return;
+            if (data.tasks && Array.isArray(data.tasks)) {
+                console.log('Decision Tree tasks:', data.tasks);
+                return data.tasks;
             }
         }
         
-        const savedCrops = localStorage.getItem('userCrops');
-        if (savedCrops) {
-            userCrops = JSON.parse(savedCrops);
-            updateDashboardWithAllCrops();
-        }
+        return getDefaultTasks(crop, daysElapsed, growthStage);
         
     } catch (error) {
-        console.error('Error loading crops:', error);
-        const savedCrops = localStorage.getItem('userCrops');
-        if (savedCrops) {
-            userCrops = JSON.parse(savedCrops);
-            updateDashboardWithAllCrops();
-        }
+        console.error('Decision Tree API call failed:', error);
+        return getDefaultTasks(crop, daysElapsed, growthStage);
     }
+}
+
+function getDefaultTasks(crop, daysElapsed, growthStage) {
+    let tasks = [];
+    
+    tasks.push({
+        task: 'Visual inspection',
+        icon: 'bi-eye',
+        description: 'Check for visible pests, diseases, or abnormalities',
+        priority: 'medium',
+        model: 'Default'
+    });
+    
+    if (growthStage === 'seedling') {
+        tasks.push({
+            task: 'Water seedlings',
+            icon: 'bi-droplet',
+            description: 'Light watering - keep soil moist but not soggy',
+            priority: 'high',
+            model: 'Default'
+        });
+        tasks.push({
+            task: 'Thin if needed',
+            icon: 'bi-scissors',
+            description: 'Remove weak seedlings to give others space',
+            priority: 'medium',
+            model: 'Default'
+        });
+    } else if (growthStage === 'vegetative') {
+        tasks.push({
+            task: 'Regular watering',
+            icon: 'bi-droplet',
+            description: 'Water deeply to encourage root growth',
+            priority: 'high',
+            model: 'Default'
+        });
+        tasks.push({
+            task: 'Weed control',
+            icon: 'bi-flower1',
+            description: 'Remove weeds around plants',
+            priority: 'medium',
+            model: 'Default'
+        });
+    } else if (growthStage === 'flowering') {
+        tasks.push({
+            task: 'Monitor pollination',
+            icon: 'bi-flower2',
+            description: 'Check flower development and pollination',
+            priority: 'high',
+            model: 'Default'
+        });
+        tasks.push({
+            task: 'Reduce nitrogen',
+            icon: 'bi-flower3',
+            description: 'Switch to potassium-rich fertilizer',
+            priority: 'medium',
+            model: 'Default'
+        });
+    } else if (growthStage === 'mature') {
+        tasks.push({
+            task: 'Harvest preparation',
+            icon: 'bi-basket',
+            description: 'Prepare for harvest in coming days',
+            priority: 'high',
+            model: 'Default'
+        });
+        tasks.push({
+            task: 'Reduce watering',
+            icon: 'bi-droplet-half',
+            description: 'Gradually reduce water before harvest',
+            priority: 'medium',
+            model: 'Default'
+        });
+    }
+    
+    return tasks;
+}
+
+// ---------------------
+// LOAD ALL USER CROPS
+// ---------------------
+async function loadAllUserCrops() {
+    // This function is now handled by loadUserProgressFromSupabase
+    // Keeping for compatibility
+    updateDashboardWithAllCrops();
 }
 
 // ---------------------
 // UPDATE DASHBOARD WITH ALL CROPS
 // ---------------------
-function updateDashboardWithAllCrops() {
+async function updateDashboardWithAllCrops() {
     const currentCropElement = document.getElementById('currentCrop');
     if (!currentCropElement) return;
     
@@ -567,25 +1107,31 @@ function updateDashboardWithAllCrops() {
                 <i class="bi bi-flower1"></i>
                 <h4>No Crops Planted Yet</h4>
                 <p>Select a crop to start your farming journey</p>
-                <button class="btn btn-primary" onclick="navigateToPage('plants')">
+                <button class="btn btn-primary" id="browseCropsBtn">
                     <i class="bi bi-arrow-right"></i> Browse Crops
                 </button>
             </div>
         `;
+        
+        // Add event listener to the button
+        const browseBtn = document.getElementById('browseCropsBtn');
+        if (browseBtn) {
+            browseBtn.addEventListener('click', () => navigateToPage('plants'));
+        }
         return;
     }
     
     let html = `
         <div class="dashboard-header">
             <h3><i class="bi bi-flower2"></i> Your Crops (${userCrops.length})</h3>
-            <button class="btn btn-sm btn-outline" onclick="navigateToPage('plants')">
+            <button class="btn btn-sm btn-outline" id="addMoreCropsBtn">
                 <i class="bi bi-plus"></i> Add More
             </button>
         </div>
         <div class="crops-grid">
     `;
     
-    userCrops.forEach(crop => {
+    for (const crop of userCrops) {
         const cropData = crops.find(c => c.name === crop.crop_type) || {
             name: crop.crop_type,
             icon: 'bi-flower1',
@@ -608,11 +1154,11 @@ function updateDashboardWithAllCrops() {
         else if (daysElapsed < 90) growthStage = 'flowering';
         else growthStage = 'mature';
         
-        const isSelected = selectedCrop && selectedCrop.planting_id === crop.planting_id;
+        const isSelected = highlightedPlantingId && highlightedPlantingId === crop.planting_id;
         
         html += `
             <div class="dashboard-crop-card ${isSelected ? 'selected' : ''}" 
-                 onclick="selectCropForDetail(${crop.planting_id})">
+                 data-planting-id="${crop.planting_id}">
                 <div class="crop-card-header">
                     <i class="bi ${cropData.icon}"></i>
                     <div>
@@ -644,34 +1190,76 @@ function updateDashboardWithAllCrops() {
                 </div>
                 
                 <div class="crop-actions">
-                    <button class="btn btn-sm btn-outline" onclick="viewCropDetails(${crop.planting_id}); event.stopPropagation()">
+                    <button class="btn btn-sm btn-outline view-crop-btn" data-planting-id="${crop.planting_id}">
                         <i class="bi bi-eye"></i> View
                     </button>
-                    <button class="btn btn-sm btn-outline" onclick="removeCrop(${crop.planting_id}); event.stopPropagation()">
+                    <button class="btn btn-sm btn-outline remove-crop-btn" data-planting-id="${crop.planting_id}">
                         <i class="bi bi-trash"></i>
                     </button>
                 </div>
             </div>
         `;
-    });
+    }
     
     html += `</div>`;
     currentCropElement.innerHTML = html;
     
+    // Add event listeners
+    document.querySelectorAll('.dashboard-crop-card').forEach(card => {
+        card.addEventListener('click', function(e) {
+            // Clicking the card should only highlight it (do not open the detail view).
+            if (!e.target.closest('.crop-actions')) {
+                const plantingId = parseInt(this.getAttribute('data-planting-id'));
+                highlightedPlantingId = highlightedPlantingId === plantingId ? null : plantingId;
+                // Re-render to update selected styling
+                updateDashboardWithAllCrops();
+            }
+        });
+    });
+
+    
+    document.querySelectorAll('.view-crop-btn').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const plantingId = parseInt(this.getAttribute('data-planting-id'));
+            // When user explicitly chooses to view details, open the detail page/view
+            viewCropDetails(plantingId);
+        });
+    });
+    
+    document.querySelectorAll('.remove-crop-btn').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const plantingId = parseInt(this.getAttribute('data-planting-id'));
+            removeCrop(plantingId);
+        });
+    });
+    
+    // Add event listener to "Add More" button
+    const addMoreBtn = document.getElementById('addMoreCropsBtn');
+    if (addMoreBtn) {
+        addMoreBtn.addEventListener('click', () => navigateToPage('plants'));
+    }
+    
     if (currentWeatherData && currentWeatherData.current) {
         updateWeatherImpact(currentWeatherData.current);
     }
+    // Show/hide main progress and today's tasks cards based on UI flag
+    const progCard = document.getElementById('growthProgressCard');
+    const tasksCard = document.getElementById('todaysTasksCard');
+    if (progCard) progCard.style.display = showTasksAndProgress ? '' : 'none';
+    if (tasksCard) tasksCard.style.display = showTasksAndProgress ? '' : 'none';
 }
 
 // ---------------------
 // SELECT CROP FOR DETAIL VIEW
 // ---------------------
-function selectCropForDetail(plantingId) {
+async function selectCropForDetail(plantingId) {
     const crop = userCrops.find(c => c.planting_id === plantingId);
     if (crop) {
         selectedCrop = crop;
         currentPlantingId = plantingId;
-        showCropDetailView(crop);
+        await showCropDetailView(crop);
         startProgressTracking();
         
         if (currentWeatherData && currentWeatherData.current) {
@@ -684,7 +1272,7 @@ function selectCropForDetail(plantingId) {
 // ---------------------
 // SHOW CROP DETAIL VIEW
 // ---------------------
-function showCropDetailView(crop) {
+async function showCropDetailView(crop) {
     const cropData = crops.find(c => c.name === crop.crop_type) || {
         name: crop.crop_type,
         icon: 'bi-flower1',
@@ -701,13 +1289,23 @@ function showCropDetailView(crop) {
     const daysRemaining = Math.max(0, cropData.duration - daysElapsed);
     const progressPercentage = Math.min(100, Math.max(0, (daysElapsed / cropData.duration) * 100));
     
+    let growthStage = 'seedling';
+    if (daysElapsed < 15) growthStage = 'seedling';
+    else if (daysElapsed < 50) growthStage = 'vegetative';
+    else if (daysElapsed < 90) growthStage = 'flowering';
+    else growthStage = 'mature';
+    
+    // Get tasks from Decision Tree model
+    const tasks = await getTasksFromDecisionTree(cropData, daysElapsed, growthStage);
+    
     const detailView = `
         <div class="crop-detail-view">
             <div class="detail-header">
-                <button class="btn btn-sm btn-outline" onclick="showAllCrops()">
+                <button class="btn btn-sm btn-outline" id="backToAllBtn">
                     <i class="bi bi-arrow-left"></i> Back to All
                 </button>
                 <h3><i class="bi ${cropData.icon}"></i> ${cropData.name} Details</h3>
+                <span class="model-badge">Decision Tree Tasks</span>
             </div>
             
             <div class="detail-main">
@@ -723,6 +1321,10 @@ function showCropDetailView(crop) {
                     <div class="stat-box">
                         <div class="stat-value">${cropData.duration}</div>
                         <div class="stat-label">Total Duration</div>
+                    </div>
+                    <div class="stat-box">
+                        <div class="stat-value">${growthStage}</div>
+                        <div class="stat-label">Growth Stage</div>
                     </div>
                 </div>
                 
@@ -757,7 +1359,13 @@ function showCropDetailView(crop) {
                 </div>
                 
                 <div class="detail-section">
-                    <h4><i class="bi bi-clipboard-check"></i> Today's Tasks</h4>
+                    <h4><i class="bi bi-clipboard-check"></i> Today's Tasks (AI Recommended)</h4>
+                    <div class="today-tasks-header">
+                        <div class="day-progress-label">Today's Completion</div>
+                        <div class="day-progress-bar">
+                            <div id="todayTasksOverallFill" class="day-progress-fill" style="width: 0%"></div>
+                        </div>
+                    </div>
                     <div id="todaysTasksDetail"></div>
                 </div>
             </div>
@@ -767,76 +1375,155 @@ function showCropDetailView(crop) {
     const currentCropElement = document.getElementById('currentCrop');
     if (currentCropElement) {
         currentCropElement.innerHTML = detailView;
-        updateTasksForDetail(crop, daysElapsed);
+        updateTasksForDetail(tasks);
+        
+        // Add event listener to back button
+        const backBtn = document.getElementById('backToAllBtn');
+        if (backBtn) {
+            backBtn.addEventListener('click', showAllCrops);
+        }
     }
 }
 
 // ---------------------
-// UPDATE TASKS FOR DETAIL VIEW
+// UPDATE TASKS FOR DETAIL VIEW (with per-task check & progress)
 // ---------------------
-function updateTasksForDetail(crop, daysElapsed) {
+function updateTasksForDetail(tasks) {
     const tasksContainer = document.getElementById('todaysTasksDetail');
     if (!tasksContainer) return;
-    
-    const cropData = crops.find(c => c.name === crop.crop_type);
-    if (!cropData) return;
-    
-    let growthStage = 'seedling';
-    if (daysElapsed < 15) growthStage = 'seedling';
-    else if (daysElapsed < 50) growthStage = 'vegetative';
-    else if (daysElapsed < 90) growthStage = 'flowering';
-    else growthStage = 'mature';
-    
-    let tasks = [];
-    
-    tasks.push({
-        task: 'Visual inspection',
-        icon: 'bi-eye',
-        description: 'Check for visible issues',
-        priority: 'medium'
-    });
-    
-    if (growthStage === 'seedling') {
-        tasks.push({
-            task: 'Water seedlings',
-            icon: 'bi-droplet',
-            description: 'Light, frequent watering',
-            priority: 'high'
-        });
-    } else if (growthStage === 'vegetative') {
-        tasks.push({
-            task: 'Regular watering',
-            icon: 'bi-droplet',
-            description: 'Deep watering to encourage roots',
-            priority: 'high'
-        });
-        tasks.push({
-            task: 'Weed control',
-            icon: 'bi-flower1',
-            description: 'Remove competing weeds',
-            priority: 'medium'
-        });
-    }
-    
-    tasksContainer.innerHTML = '';
-    tasks.forEach(task => {
-        const taskItem = document.createElement('div');
-        taskItem.className = `task-item ${task.priority}`;
-        taskItem.innerHTML = `
-            <i class="bi ${task.icon}"></i>
-            <div class="task-content">
-                <div class="task-title">${task.task}</div>
-                <div class="task-description">${task.description}</div>
+    const plantingId = selectedCrop ? selectedCrop.planting_id : currentPlantingId;
+    const today = getTodayStr();
+
+    if (!tasks || tasks.length === 0) {
+        tasksContainer.innerHTML = `
+            <div class="info-note">
+                <i class="bi bi-info-circle"></i>
+                <span>No specific tasks for today. Continue regular monitoring.</span>
             </div>
-            <i class="bi bi-check-circle task-check"></i>
         `;
-        
-        taskItem.addEventListener('click', function() {
-            this.classList.toggle('completed');
-        });
-        
-        tasksContainer.appendChild(taskItem);
+        updateTodayTasksOverallProgress(plantingId, 0, 0);
+        return;
+    }
+
+    const completions = loadTaskCompletionsForPlanting(plantingId);
+    const todays = (completions && completions[today]) ? completions[today] : {};
+
+    tasksContainer.innerHTML = '';
+    let completedCount = 0;
+
+    tasks.forEach((task, idx) => {
+        const done = todays[idx] && todays[idx].completed;
+        if (done) completedCount++;
+        const modelBadge = task.model ? `<span class="model-badge-small">${task.model}</span>` : '';
+
+        const html = `
+            <div class="task-item ${task.priority || 'medium'}" data-task-idx="${idx}">
+                <i class="bi ${task.icon || 'bi-check-circle'}"></i>
+                <div class="task-content">
+                    <div class="task-title">${task.task}</div>
+                    <div class="task-description">${task.description}</div>
+                    ${modelBadge}
+                </div>
+                <div class="task-controls">
+                    <button class="btn task-check-btn ${done ? 'done' : ''}" data-idx="${idx}" title="${done ? 'Mark as not done' : 'Mark as done'}">
+                        <i class="bi ${done ? 'bi-check-lg' : 'bi-circle'}"></i>
+                    </button>
+                    <div class="task-progress">
+                        <div class="task-progress-fill" style="width: ${done ? 100 : 0}%"></div>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        tasksContainer.insertAdjacentHTML('beforeend', html);
     });
+
+    // Attach listeners to check buttons
+    tasksContainer.querySelectorAll('.task-check-btn').forEach(btn => {
+        btn.addEventListener('click', function(e) {
+            e.stopPropagation();
+            const idx = parseInt(this.getAttribute('data-idx'));
+            toggleTaskCompletion(plantingId, idx);
+        });
+    });
+
+    updateTodayTasksOverallProgress(plantingId, completedCount, tasks.length);
+}
+
+// ---------------------
+// TASK COMPLETION STORAGE & HELPERS
+// ---------------------
+function getTodayStr() {
+    const t = new Date();
+    return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
+}
+
+function loadTaskCompletions() {
+    return JSON.parse(localStorage.getItem('taskCompletions') || '{}');
+}
+
+function saveTaskCompletions(obj) {
+    localStorage.setItem('taskCompletions', JSON.stringify(obj));
+    // Persist user progress so server can later be extended to include tasks
+    try {
+        saveUserProgressToSupabase();
+    } catch (e) {
+        // ignore if not available
+    }
+}
+
+function loadTaskCompletionsForPlanting(plantingId) {
+    const all = loadTaskCompletions();
+    return all[plantingId] || {};
+}
+
+function toggleTaskCompletion(plantingId, idx) {
+    const date = getTodayStr();
+    const all = loadTaskCompletions();
+    if (!all[plantingId]) all[plantingId] = {};
+    if (!all[plantingId][date]) all[plantingId][date] = {};
+
+    const current = all[plantingId][date][idx] ? all[plantingId][date][idx].completed : false;
+    all[plantingId][date][idx] = { completed: !current, timestamp: new Date().toISOString() };
+
+    saveTaskCompletions(all);
+
+    // Update UI for the specific task
+    const tasksContainer = document.getElementById('todaysTasksDetail');
+    const item = tasksContainer ? tasksContainer.querySelector(`.task-item[data-task-idx="${idx}"]`) : null;
+    if (item) {
+        const btn = item.querySelector('.task-check-btn');
+        const fill = item.querySelector('.task-progress-fill');
+        if (all[plantingId][date][idx].completed) {
+            btn.classList.add('done');
+            btn.innerHTML = '<i class="bi bi-check-lg"></i>';
+            fill.style.width = '100%';
+        } else {
+            btn.classList.remove('done');
+            btn.innerHTML = '<i class="bi bi-circle"></i>';
+            fill.style.width = '0%';
+        }
+    }
+
+    // Recalculate overall
+    const tasksElems = tasksContainer ? tasksContainer.querySelectorAll('.task-item') : [];
+    let doneCount = 0;
+    tasksElems.forEach(el => {
+        const idxAttr = parseInt(el.getAttribute('data-task-idx'));
+        const done = all[plantingId][date] && all[plantingId][date][idxAttr] && all[plantingId][date][idxAttr].completed;
+        if (done) doneCount++;
+    });
+    updateTodayTasksOverallProgress(plantingId, doneCount, tasksElems.length);
+
+    showNotification('success', 'Task updated', all[plantingId][date][idx].completed ? 'Marked done for today' : 'Marked not done');
+}
+
+function updateTodayTasksOverallProgress(plantingId, completedCount, total) {
+    const fill = document.getElementById('todayTasksOverallFill');
+    const percent = total === 0 ? 0 : Math.round((completedCount / total) * 100);
+    if (fill) fill.style.width = `${percent}%`;
+    const label = document.querySelector('.day-progress-label');
+    if (label) label.textContent = `Today's Completion — ${percent}% (${completedCount}/${total})`;
 }
 
 // ---------------------
@@ -845,6 +1532,9 @@ function updateTasksForDetail(crop, daysElapsed) {
 function showAllCrops() {
     selectedCrop = null;
     currentPlantingId = null;
+    // Reset UI flags so main dashboard doesn't show tasks/progress
+    showTasksAndProgress = false;
+    highlightedPlantingId = null;
     updateDashboardWithAllCrops();
     updateWeatherImpact(currentWeatherData ? currentWeatherData.current : null);
 }
@@ -859,7 +1549,7 @@ function viewCropDetails(plantingId) {
 // ---------------------
 // REMOVE CROP
 // ---------------------
-function removeCrop(plantingId) {
+async function removeCrop(plantingId) {
     if (confirm('Are you sure you want to remove this crop? This will delete all associated data.')) {
         userCrops = userCrops.filter(crop => crop.planting_id !== plantingId);
         
@@ -868,27 +1558,16 @@ function removeCrop(plantingId) {
             currentPlantingId = null;
         }
         
-        localStorage.setItem('userCrops', JSON.stringify(userCrops));
+        // Save progress after removal
+        await saveUserProgressToSupabase();
+        
         updateDashboardWithAllCrops();
-        showNotification('info', 'Crop Removed', 'Crop has been removed from your dashboard.');
+        showNotification('info', 'Crop Removed', 'Crop has been removed from your account.');
     }
 }
 
 // ---------------------
-// CREATE NAV OVERLAY FOR MOBILE
-// ---------------------
-function createNavOverlay() {
-    if (!document.getElementById('navOverlay')) {
-        const overlay = document.createElement('div');
-        overlay.id = 'navOverlay';
-        overlay.className = 'mobile-nav-overlay';
-        overlay.addEventListener('click', toggleNavigation);
-        document.body.appendChild(overlay);
-    }
-}
-
-// ---------------------
-// EVENT LISTENERS
+// EVENT LISTENERS SETUP
 // ---------------------
 function setupEventListeners() {
     console.log('Setting up event listeners...');
@@ -935,14 +1614,9 @@ function setupEventListeners() {
     const imageUpload = document.getElementById('imageUpload');
     if (imageUpload) imageUpload.addEventListener('change', handleImageUpload);
 
-    const loginBtn = document.getElementById('loginBtn');
-    if (loginBtn) {
-        loginBtn.addEventListener('click', showLoginModal);
-    }
-
-    const manualEntryBtn = document.getElementById('manualEntryBtn');
-    if (manualEntryBtn) {
-        manualEntryBtn.addEventListener('click', showManualEntryModal);
+    const logoutBtn = document.getElementById('logoutBtn');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', logoutUser);
     }
 
     document.addEventListener('click', function(e) {
@@ -974,37 +1648,6 @@ function setupEventListeners() {
 function setupNavigationListeners() {
     console.log('Setting up navigation listeners...');
     
-    const calendarNavItem = document.querySelector('[data-page="calendar"]');
-    if (calendarNavItem) {
-        calendarNavItem.style.display = 'none';
-    }
-    
-    const navContainer = document.getElementById('navItems');
-    if (!navContainer) {
-        setupDirectNavigationListeners();
-        return;
-    }
-    
-    navContainer.addEventListener('click', function(e) {
-        const navItem = e.target.closest('.nav-item');
-        if (!navItem) return;
-        
-        e.preventDefault();
-        
-        if (navItem.id === 'logoutBtn') {
-            showLoginModal();
-        } else {
-            const page = navItem.getAttribute('data-page');
-            if (page && page !== 'calendar') {
-                navigateToPage(page);
-            }
-        }
-    });
-    
-    setupDirectNavigationListeners();
-}
-
-function setupDirectNavigationListeners() {
     const navItems = document.querySelectorAll('.nav-item');
     console.log(`Found ${navItems.length} nav items to set up listeners`);
     
@@ -1020,7 +1663,7 @@ function setupDirectNavigationListeners() {
             console.log('Nav item clicked:', this.id, this.getAttribute('data-page'));
             
             if (this.id === 'logoutBtn') {
-                showLoginModal();
+                logoutUser();
             } else {
                 const page = this.getAttribute('data-page');
                 if (page) {
@@ -1038,7 +1681,6 @@ function toggleNavigation() {
     console.log('Toggling navigation...');
     const sideNav = document.getElementById('side_nav');
     const menuToggle = document.getElementById('menuToggle');
-    const navOverlay = document.getElementById('navOverlay');
     
     if (!sideNav) {
         console.error('Side navigation not found!');
@@ -1048,15 +1690,7 @@ function toggleNavigation() {
     const isOpening = !sideNav.classList.contains('active');
     sideNav.classList.toggle('active');
     
-    if (navOverlay) {
-        navOverlay.classList.toggle('active');
-    }
-    
     if (menuToggle) {
-        // Determine the actual icon element. The markup sometimes uses
-        // <i id="menuToggle" class="bi bi-list"></i> or a container
-        // that contains an <i> child. Handle both cases to avoid
-        // creating nested <i> elements.
         let iconEl = null;
 
         if (menuToggle.tagName && menuToggle.tagName.toLowerCase() === 'i') {
@@ -1071,7 +1705,6 @@ function toggleNavigation() {
             }
         }
 
-        // Set the icon class instead of appending/removing nodes
         iconEl.className = isOpening ? 'bi bi-x-lg' : 'bi bi-list';
         document.body.style.overflow = isOpening ? 'hidden' : '';
     }
@@ -1113,9 +1746,7 @@ function navigateToPage(pageName) {
         toggleNavigation();
     }
 
-    if (pageName === 'analytics') {
-        loadAnalytics();
-    } else if (pageName === 'plants') {
+    if (pageName === 'plants') {
         initializePlantsGrid();
     } else if (pageName === 'fertilizer') {
         loadFertilizerPage();
@@ -1150,22 +1781,19 @@ function initializeNavigation() {
 }
 
 // ---------------------
-// USER FUNCTIONS (OPTIONAL LOGIN)
+// USER FUNCTIONS
 // ---------------------
-function showLoginModal() {
-    const loginModal = document.getElementById('loginModal');
-    if (loginModal) loginModal.style.display = 'flex';
-}
-
-function hideLoginModal() {
-    const loginModal = document.getElementById('loginModal');
-    if (loginModal) loginModal.style.display = 'none';
-}
-
 function updateUserDisplay() {
-    const usernameDisplay = document.getElementById('usernameDisplay');
-    if (usernameDisplay) {
-        usernameDisplay.textContent = currentUser ? currentUser.username : 'Demo User';
+    const loginBtn = document.getElementById('logoutBtn');
+    
+    if (loginBtn) {
+        if (currentUser.id === DEMO_USER_ID) {
+            loginBtn.innerHTML = '<i class="bi bi-box-arrow-in-right"></i> Login';
+            loginBtn.id = 'loginBtn';
+        } else {
+            loginBtn.innerHTML = '<i class="bi bi-box-arrow-right"></i> Logout';
+            loginBtn.id = 'logoutBtn';
+        }
     }
 }
 
@@ -1182,7 +1810,7 @@ function hideLocationModal() {
     if (locationModal) locationModal.style.display = 'none';
 }
 
-function detectLocation() {
+async function detectLocation() {
     const autoDetectBtn = document.getElementById('autoDetectBtn');
     
     if (navigator.geolocation) {
@@ -1192,7 +1820,7 @@ function detectLocation() {
         }
         
         navigator.geolocation.getCurrentPosition(
-            (position) => {
+            async (position) => {
                 const lat = position.coords.latitude;
                 const lon = position.coords.longitude;
                 
@@ -1205,7 +1833,7 @@ function detectLocation() {
                 updateLocationDisplay();
                 fetchWeatherDataFromAPI();
                 hideLocationModal();
-                saveLocation();
+                await saveUserProgressToSupabase();
                 
                 if (autoDetectBtn) {
                     autoDetectBtn.innerHTML = '<i class="bi bi-geo-alt"></i> Auto Detect Location';
@@ -1225,7 +1853,7 @@ function detectLocation() {
     }
 }
 
-function setManualLocation() {
+async function setManualLocation() {
     const manualLocation = document.getElementById('manualLocation');
     const locationName = manualLocation ? manualLocation.value.trim() : '';
     
@@ -1239,7 +1867,7 @@ function setManualLocation() {
         updateLocationDisplay();
         fetchWeatherDataFromAPI();
         hideLocationModal();
-        saveLocation();
+        await saveUserProgressToSupabase();
         
         if (manualLocation) manualLocation.value = '';
     } else {
@@ -1251,12 +1879,6 @@ function updateLocationDisplay() {
     const currentLocation = document.getElementById('currentLocation');
     if (userLocation && currentLocation) {
         currentLocation.textContent = userLocation.name;
-    }
-}
-
-function saveLocation() {
-    if (userLocation) {
-        localStorage.setItem('userLocation', JSON.stringify(userLocation));
     }
 }
 
@@ -1460,7 +2082,9 @@ function initializePlantsGrid() {
             <h4>${crop.name}</h4>
             <p>Season: ${crop.season}</p>
             <p>Duration: ${crop.duration} days</p>
-            <button class="btn-plant" data-crop="${crop.name}">Plant Now</button>
+            <button class="btn-plant" data-crop="${crop.name}">
+                <i class="bi bi-seed"></i> Plant Now
+            </button>
         `;
         
         const plantBtn = plantCard.querySelector('.btn-plant');
@@ -1471,12 +2095,6 @@ function initializePlantsGrid() {
                 showPlantingCalendar(crop);
             });
         }
-        
-        plantCard.addEventListener('click', (e) => {
-            if (!e.target.classList.contains('btn-plant')) {
-                console.log('Plant card clicked for info:', crop.name);
-            }
-        });
         
         plantsGrid.appendChild(plantCard);
     });
@@ -1500,7 +2118,7 @@ function showPlantingCalendar(crop) {
         <div class="modal planting-calendar-modal">
             <div class="modal-header">
                 <h4><i class="bi ${crop.icon}"></i> Plant ${crop.name}</h4>
-                <button class="btn-close" onclick="this.closest('.modal-overlay').remove()">&times;</button>
+                <button class="btn-close" id="closePlantingModal">&times;</button>
             </div>
             <div class="modal-body">
                 <p>Select your planting date for ${crop.name}</p>
@@ -1511,13 +2129,18 @@ function showPlantingCalendar(crop) {
                 </div>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
-                <button class="btn btn-primary" onclick="confirmPlanting('${crop.name}')">Confirm Planting</button>
+                <button class="btn btn-outline" id="cancelPlanting">Cancel</button>
+                <button class="btn btn-primary" id="confirmPlanting">Confirm Planting</button>
             </div>
         </div>
     `;
     
     document.body.appendChild(modal);
+    
+    // Add event listeners
+    document.getElementById('closePlantingModal').addEventListener('click', () => modal.remove());
+    document.getElementById('cancelPlanting').addEventListener('click', () => modal.remove());
+    document.getElementById('confirmPlanting').addEventListener('click', () => confirmPlanting(crop.name));
     
     setTimeout(() => initializePlantingCalendar(), 100);
 }
@@ -1533,7 +2156,6 @@ function initializePlantingCalendar() {
     const calendarContainer = document.getElementById('plantingCalendar');
     if (!calendarContainer) return;
     
-    // Initialize calendar month/year if not set
     if (currentCalendarMonth === null || currentCalendarYear === null) {
         const today = new Date();
         currentCalendarMonth = today.getMonth();
@@ -1554,11 +2176,11 @@ function generatePlantingCalendarHTML(month, year) {
     
     let html = `
         <div class="calendar-popup-header">
-            <button class="btn-calendar-nav" onclick="changePlantingMonth(-1)">
+            <button class="btn-calendar-nav" id="prevMonth">
                 <i class="bi bi-chevron-left"></i>
             </button>
             <h5>${firstDay.toLocaleDateString('en', { month: 'long', year: 'numeric' })}</h5>
-            <button class="btn-calendar-nav" onclick="changePlantingMonth(1)">
+            <button class="btn-calendar-nav" id="nextMonth">
                 <i class="bi bi-chevron-right"></i>
             </button>
         </div>
@@ -1573,15 +2195,12 @@ function generatePlantingCalendarHTML(month, year) {
     }
     
     const today = new Date();
-    // Extend future date limit to ~2 years ahead
     const maxDate = new Date();
     maxDate.setFullYear(maxDate.getFullYear() + 2);
     
-    // Get today's date string in YYYY-MM-DD format
     const todayStr = String(today.getFullYear()) + '-' + String(today.getMonth() + 1).padStart(2, '0') + '-' + String(today.getDate()).padStart(2, '0');
     
     for (let day = 1; day <= daysInMonth; day++) {
-        // Format date as YYYY-MM-DD string
         const dateStr = String(year) + '-' + String(month + 1).padStart(2, '0') + '-' + String(day).padStart(2, '0');
         const date = new Date(year, month, day);
         const isToday = dateStr === todayStr;
@@ -1595,8 +2214,7 @@ function generatePlantingCalendarHTML(month, year) {
         
         html += `
             <div class="${dayClass}" 
-                 data-date="${dateStr}"
-                 onclick="${!isPast && !isTooFarFuture ? 'selectPlantingDate(this)' : ''}">
+                 data-date="${dateStr}">
                 ${day}
                 ${isToday ? '<div class="today-badge">Today</div>' : ''}
             </div>
@@ -1612,6 +2230,31 @@ function generatePlantingCalendarHTML(month, year) {
             <input type="hidden" id="plantingDateInput" value="${todayStr}">
         </div>
     `;
+    
+    // Add event listeners after the HTML is inserted
+    setTimeout(() => {
+        // Month navigation
+        const prevMonthBtn = document.getElementById('prevMonth');
+        const nextMonthBtn = document.getElementById('nextMonth');
+        
+        if (prevMonthBtn) {
+            prevMonthBtn.addEventListener('click', () => changePlantingMonth(-1));
+        }
+        if (nextMonthBtn) {
+            nextMonthBtn.addEventListener('click', () => changePlantingMonth(1));
+        }
+        
+        // Day selection
+        document.querySelectorAll('.calendar-popup-day:not(.past):not(.future)').forEach(day => {
+            day.addEventListener('click', () => selectPlantingDate(day));
+        });
+        
+        // Select today by default
+        const todayElement = document.querySelector('.calendar-popup-day.today');
+        if (todayElement) {
+            selectPlantingDate(todayElement);
+        }
+    }, 0);
     
     return html;
 }
@@ -1648,7 +2291,6 @@ function changePlantingMonth(delta) {
     
     currentCalendarMonth += delta;
     
-    // Wrap months and adjust year
     if (currentCalendarMonth > 11) {
         currentCalendarMonth = 0;
         currentCalendarYear += 1;
@@ -1668,72 +2310,23 @@ async function confirmPlanting(cropName) {
     if (!crop) return;
     
     const plantingDate = document.getElementById('plantingDateInput').value;
-    
-    try {
-        const userId = currentUser ? currentUser.id : DEMO_USER_ID;
-        
-        const response = await fetch(`${API_BASE_URL}/select-crop`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                user_id: userId,
-                crop_type: crop.name,
-                planting_date: plantingDate
-            })
-        });
-        
-        let data;
-        try {
-            data = await response.json();
-        } catch (parseError) {
-            console.error('Error parsing response:', parseError);
-            return simulateCropPlanting(crop, plantingDate);
-        }
-        
-        if (response.ok && data.success) {
-            const newCrop = {
-                planting_id: data.planting_id,
-                crop_type: crop.name,
-                planting_date: plantingDate,
-                user_id: userId,
-                created_at: new Date().toISOString()
-            };
-            
-            userCrops.push(newCrop);
-            localStorage.setItem('userCrops', JSON.stringify(userCrops));
-            document.querySelector('.modal-overlay').remove();
-            updateDashboardWithAllCrops();
-            navigateToPage('home');
-            
-            showNotification('success', `${crop.name} Planted!`, 
-                          `Planted on ${new Date(plantingDate).toLocaleDateString()}. Expected harvest in ${crop.duration} days.`);
-            
-        } else {
-            simulateCropPlanting(crop, plantingDate);
-        }
-    } catch (error) {
-        console.error('Error planting crop:', error);
-        simulateCropPlanting(crop, plantingDate);
-    }
-}
-
-// ---------------------
-// SIMULATE CROP PLANTING
-// ---------------------
-function simulateCropPlanting(crop, plantingDate = new Date().toISOString().split('T')[0]) {
     const plantingId = Date.now();
     
     const newCrop = {
         planting_id: plantingId,
         crop_type: crop.name,
         planting_date: plantingDate,
-        user_id: DEMO_USER_ID,
+        user_id: currentUser.id,
         created_at: new Date().toISOString()
     };
     
+    // Add to local array
     userCrops.push(newCrop);
-    localStorage.setItem('userCrops', JSON.stringify(userCrops));
     
+    // Save to Supabase
+    await saveUserProgressToSupabase();
+    
+    // Close modal and update UI
     const modal = document.querySelector('.modal-overlay');
     if (modal) modal.remove();
     
@@ -1741,7 +2334,7 @@ function simulateCropPlanting(crop, plantingDate = new Date().toISOString().spli
     navigateToPage('home');
     
     showNotification('success', `${crop.name} Planted!`, 
-                   `Planted on ${new Date(plantingDate).toLocaleDateString()}. Working in offline mode.`);
+                   `Planted on ${new Date(plantingDate).toLocaleDateString()}. Progress saved to your account.`);
 }
 
 // ---------------------
@@ -1809,7 +2402,7 @@ function updateProgressFromAPI(data) {
     checkMilestones(data.days_elapsed, data.growth_stage);
 }
 
-function updateProgressLocally() {
+async function updateProgressLocally() {
     if (!selectedCrop) return;
     
     const plantingDate = new Date(selectedCrop.planting_date);
@@ -1851,98 +2444,52 @@ function updateProgressLocally() {
     if (daysElapsedElement) daysElapsedElement.textContent = daysElapsed;
     if (daysRemainingElement) daysRemainingElement.textContent = Math.max(0, totalDays - daysElapsed);
     
-    updateTasks(growthStage, progressPercentage);
+    // Update tasks using Decision Tree model
+    const cropDataObj = crops.find(c => c.name === selectedCrop.crop_type) || {
+        name: selectedCrop.crop_type,
+        duration: 100
+    };
+    const tasks = await getTasksFromDecisionTree(cropDataObj, daysElapsed, growthStage);
+    await updateTasksWithAI(tasks || [], growthStage, progressPercentage);
+    
     checkMilestones(daysElapsed, growthStage);
 }
 
-function updateTasks(growthStage, progress) {
+async function updateTasksWithAI(tasks, growthStage, progress) {
     const tasksList = document.getElementById('todaysTasks');
     if (!tasksList) return;
     
-    let tasks = [];
-    
-    tasks.push({
-        task: 'Visual inspection',
-        icon: 'bi-eye',
-        description: 'Check for visible pests, diseases, or abnormalities',
-        priority: 'medium'
-    });
-    
-    if (growthStage === 'seedling') {
-        tasks.push({
-            task: 'Water seedlings',
-            icon: 'bi-droplet',
-            description: 'Light watering - keep soil moist but not soggy',
-            priority: 'high'
-        });
-        tasks.push({
-            task: 'Thin if needed',
-            icon: 'bi-scissors',
-            description: 'Remove weak seedlings to give others space',
-            priority: 'medium'
-        });
-    } else if (growthStage === 'vegetative') {
-        tasks.push({
-            task: 'Regular watering',
-            icon: 'bi-droplet',
-            description: 'Water deeply to encourage root growth',
-            priority: 'high'
-        });
-        tasks.push({
-            task: 'Weed control',
-            icon: 'bi-flower1',
-            description: 'Remove weeds around plants',
-            priority: 'medium'
-        });
-    } else if (growthStage === 'flowering') {
-        tasks.push({
-            task: 'Monitor pollination',
-            icon: 'bi-flower2',
-            description: 'Check flower development and pollination',
-            priority: 'high'
-        });
-        tasks.push({
-            task: 'Reduce nitrogen',
-            icon: 'bi-flower3',
-            description: 'Switch to potassium-rich fertilizer',
-            priority: 'medium'
-        });
-    } else if (growthStage === 'mature') {
-        tasks.push({
-            task: 'Harvest preparation',
-            icon: 'bi-basket',
-            description: 'Prepare for harvest in coming days',
-            priority: 'high'
-        });
-        tasks.push({
-            task: 'Reduce watering',
-            icon: 'bi-droplet-half',
-            description: 'Gradually reduce water before harvest',
-            priority: 'medium'
-        });
+    // If the UI flag says don't show tasks on the main dashboard, keep it minimal.
+    if (!showTasksAndProgress) {
+        tasksList.innerHTML = '<p>No tasks scheduled</p>';
+        return;
     }
     
-    if (userLocation) {
-        const isHot = true;
-        if (isHot) {
-            tasks.push({
-                task: 'Extra watering',
-                icon: 'bi-sun',
-                description: 'Hot weather - increase watering frequency',
-                priority: 'high'
-            });
-        }
+    // If no tasks from Decision Tree, use default tasks
+    if (!tasks || tasks.length === 0) {
+        tasks = getDefaultTasks(
+            crops.find(c => c.name === selectedCrop.crop_type),
+            Math.floor((new Date() - new Date(selectedCrop.planting_date)) / (1000 * 60 * 60 * 24)),
+            growthStage
+        );
     }
     
     tasksList.innerHTML = '';
     tasks.forEach(task => {
         const taskItem = document.createElement('div');
-        taskItem.className = `task-item ${task.priority}`;
+        taskItem.className = `task-item ${task.priority || 'medium'}`;
+        
+        let modelBadge = '';
+        if (task.model) {
+            modelBadge = `<span class="model-badge-small">${task.model}</span>`;
+        }
+        
         taskItem.innerHTML = `
-            <i class="bi ${task.icon}"></i>
+            <i class="bi ${task.icon || 'bi-check-circle'}"></i>
             <div class="task-content">
                 <div class="task-title">${task.task}</div>
                 <div class="task-description">${task.description}</div>
+                ${modelBadge}
             </div>
             <i class="bi bi-check-circle task-check"></i>
         `;
@@ -1953,6 +2500,10 @@ function updateTasks(growthStage, progress) {
         
         tasksList.appendChild(taskItem);
     });
+}
+
+function updateTasks(growthStage, progress) {
+    // This function is kept for compatibility
 }
 
 function checkMilestones(daysElapsed, growthStage) {
@@ -2122,94 +2673,9 @@ async function implementRecommendation(recommendationId) {
 }
 
 // ---------------------
-// MANUAL DATA ENTRY
-// ---------------------
-function showManualEntryModal() {
-    const modal = document.getElementById('manualEntryModal');
-    if (modal) {
-        modal.style.display = 'flex';
-        
-        if (selectedCrop) {
-            const soilPhInput = document.getElementById('manualSoilPh');
-            if (soilPhInput) {
-                const idealPh = {
-                    'Tomato': 6.2,
-                    'Rice': 6.0,
-                    'Wheat': 6.5,
-                    'Maize': 6.8,
-                    'Potato': 5.5
-                };
-                soilPhInput.value = idealPh[selectedCrop.crop_type] || 6.5;
-            }
-        }
-    }
-}
-
-function hideManualEntryModal() {
-    const modal = document.getElementById('manualEntryModal');
-    if (modal) modal.style.display = 'none';
-}
-
-async function submitManualData() {
-    const form = document.getElementById('manualEntryForm');
-    if (!form) return;
-    
-    const formData = {
-        soil_moisture: parseFloat(document.getElementById('manualSoilMoisture').value) || 50,
-        temperature: parseFloat(document.getElementById('manualTemperature').value) || 25,
-        humidity: parseFloat(document.getElementById('manualHumidity').value) || 60,
-        soil_ph: parseFloat(document.getElementById('manualSoilPh').value) || 6.5,
-        pest_level: document.getElementById('manualPestLevel').value || 'low',
-        disease_observed: document.getElementById('manualDisease').checked ? 1 : 0,
-        notes: document.getElementById('manualNotes').value || ''
-    };
-    
-    try {
-        if (currentPlantingId) {
-            const response = await fetch(`${API_BASE_URL}/crop/${currentPlantingId}/observation`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(formData)
-            });
-            
-            if (response.ok) {
-                showNotification('success', 'Data Saved!', 'Manual entry submitted successfully.');
-            } else {
-                saveObservationLocally(formData);
-                showNotification('success', 'Data Saved Locally!', 'Manual entry saved to browser storage.');
-            }
-            
-            hideManualEntryModal();
-            form.reset();
-            await getAIRecommendation(currentPlantingId);
-        } else {
-            showNotification('warning', 'No Active Crop', 'Please select a crop first.');
-        }
-    } catch (error) {
-        console.error('Error submitting manual data:', error);
-        saveObservationLocally(formData);
-        showNotification('success', 'Data Saved Locally!', 'Manual entry saved to browser storage.');
-        hideManualEntryModal();
-        form.reset();
-    }
-}
-
-function saveObservationLocally(observation) {
-    const observations = JSON.parse(localStorage.getItem('cropObservations') || '[]');
-    observations.push({
-        ...observation,
-        planting_id: currentPlantingId,
-        timestamp: new Date().toISOString(),
-        crop_type: selectedCrop?.crop_type
-    });
-    localStorage.setItem('cropObservations', JSON.stringify(observations));
-}
-
-// ---------------------
 // ML MODEL FUNCTIONS
 // ---------------------
 async function loadModel() {
-    // Verify backend H5 model availability. Frontend will use backend for predictions.
     try {
         const resp = await fetch(`${API_BASE_URL}/predict`, {
             method: 'POST',
@@ -2240,52 +2706,6 @@ async function loadLabels() {
     } catch (e) {
         console.warn('Labels not found — will use numeric indices.');
         labels = null;
-    }
-}
-
-function injectScript(src) {
-    return new Promise((resolve, reject) => {
-        if (document.querySelector(`script[src="${src}"]`)) return resolve();
-        const s = document.createElement('script');
-        s.src = src;
-        s.onload = () => resolve();
-        s.onerror = (e) => reject(e);
-        document.head.appendChild(s);
-    });
-}
-
-async function tryLoadTFJS() {
-    if (!window.tf) return false;
-    try {
-        try {
-            tfModel = await tf.loadGraphModel(MODEL_CONFIG.tfjsModelUrl);
-            console.log('Loaded TF.js GraphModel');
-        } catch (e) {
-            console.log('GraphModel load failed; trying loadLayersModel...');
-            tfModel = await tf.loadLayersModel(MODEL_CONFIG.tfjsModelUrl);
-            console.log('Loaded TF.js LayersModel');
-        }
-        const warm = tf.zeros([1, MODEL_CONFIG.inputSize, MODEL_CONFIG.inputSize, 3]);
-        tfModel.predict ? tfModel.predict(warm) : tfModel.execute(warm);
-        tf.dispose(warm);
-        return true;
-    } catch (err) {
-        console.warn('TF.js model load failed:', err);
-        tfModel = null;
-        return false;
-    }
-}
-
-async function tryLoadONNX() {
-    if (!window.ort) return false;
-    try {
-        onnxSession = await ort.InferenceSession.create(MODEL_CONFIG.onnxModelUrl);
-        console.log('Loaded ONNX model');
-        return true;
-    } catch (err) {
-        console.warn('ONNX model load failed:', err);
-        onnxSession = null;
-        return false;
     }
 }
 
@@ -2321,7 +2741,6 @@ function handleImageUpload(event) {
 async function predictFromFile(file) {
     if (!file) return;
 
-    // Send image to backend H5 model for prediction
     const formData = new FormData();
     formData.append('image', file);
 
@@ -2424,7 +2843,6 @@ function renderResults(topList) {
     } else {
         html += `<div class="result-list">`;
         for (const item of topList) {
-            // Support two formats: {idx, score} (old) or {label, score} (backend)
             const label = item.label ? item.label : (labels && typeof item.idx !== 'undefined' && labels[item.idx] ? labels[item.idx] : (item.idx !== undefined ? `Class ${item.idx}` : 'Unknown'));
             const confidence = (item.score * 100).toFixed(1);
             const isProblem = label.toLowerCase().includes('disease') || label.toLowerCase().includes('pest');
@@ -2535,9 +2953,13 @@ async function submitManualAnalysis() {
         planting_id: currentPlantingId
     };
     
+    // Save detection
     const detections = JSON.parse(localStorage.getItem('cropDetections') || '[]');
     detections.push(detection);
     localStorage.setItem('cropDetections', JSON.stringify(detections));
+    
+    // Save progress to Supabase
+    await saveUserProgressToSupabase();
     
     showManualAnalysisResult(pestLevel, diseaseType);
 }
@@ -2586,7 +3008,7 @@ function showManualAnalysisResult(pestLevel, diseaseType) {
                 <button class="btn btn-primary" onclick="getAIRecommendation(${currentPlantingId})">
                     <i class="bi bi-robot"></i> Get AI Advice
                 </button>
-                <button class="btn btn-outline" onclick="navigateToPage('analytics')">
+                <button class="btn btn-outline" onclick="navigateToPage('home')">
                     <i class="bi bi-graph-up"></i> View History
                 </button>
             </div>
@@ -2633,423 +3055,28 @@ async function logDetection(detectionLabelEncoded, detectionScore = 0) {
     }
 
     const detectionLabel = detectionLabelEncoded ? decodeURIComponent(detectionLabelEncoded) : 'Unknown';
+    
     try {
-        const response = await fetch(`${API_BASE_URL}/crop/${currentPlantingId}/image-analysis`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-                detected_disease: detectionLabel,
-                detected_pests: null,
-                disease_confidence: detectionScore || 0,
-                overall_health_score: Math.max(0, 100 - (detectionScore ? (detectionScore * 100 * 0.5) : 25))
-            })
-        });
-
-        if (response.ok) {
-            showNotification('success', 'Detection Logged', 'Added to crop history.');
-        } else {
-            const logs = JSON.parse(localStorage.getItem('detectionLogs') || '[]');
-            logs.push({
-                planting_id: currentPlantingId,
-                detection_label: detectionLabel,
-                detection_score: detectionScore,
-                timestamp: new Date().toISOString(),
-                type: 'automatic'
-            });
-            localStorage.setItem('detectionLogs', JSON.stringify(logs));
-            showNotification('success', 'Detection Saved Locally', 'Added to local history.');
-        }
-
-        await getAIRecommendation(currentPlantingId);
-
-    } catch (error) {
-        console.error('Error logging detection:', error);
+        // Save detection to localStorage
         const logs = JSON.parse(localStorage.getItem('detectionLogs') || '[]');
         logs.push({
             planting_id: currentPlantingId,
             detection_label: detectionLabel,
             detection_score: detectionScore,
             timestamp: new Date().toISOString(),
-            type: 'automatic',
-            error: error.message
+            type: 'automatic'
         });
         localStorage.setItem('detectionLogs', JSON.stringify(logs));
-        showNotification('warning', 'Logged Locally', 'Saved detection locally due to network error.');
-    }
-}
+        
+        // Save progress to Supabase
+        await saveUserProgressToSupabase();
+        
+        showNotification('success', 'Detection Logged', 'Added to your crop history.');
+        await getAIRecommendation(currentPlantingId);
 
-// ---------------------
-// ANALYTICS FUNCTIONS
-// ---------------------
-async function loadAnalytics() {
-    const analyticsContainer = document.getElementById('analytics');
-    if (!analyticsContainer) return;
-    
-    if (userCrops.length === 0) {
-        analyticsContainer.innerHTML = `
-            <div class="empty-state">
-                <i class="bi bi-graph-up"></i>
-                <h4>No Data Available</h4>
-                <p>Plant a crop and add observations to see analytics</p>
-                <button class="btn btn-primary" onclick="navigateToPage('plants')">
-                    <i class="bi bi-flower1"></i> Plant a Crop
-                </button>
-            </div>
-        `;
-        return;
-    }
-    
-    analyticsContainer.innerHTML = `
-        <div class="loading-analytics">
-            <div class="spinner"></div>
-            <p>Loading analytics data...</p>
-        </div>
-    `;
-    
-    try {
-        const detections = JSON.parse(localStorage.getItem('cropDetections') || '[]');
-        const logs = JSON.parse(localStorage.getItem('detectionLogs') || '[]');
-        const observations = JSON.parse(localStorage.getItem('cropObservations') || '[]');
-        
-        let currentCropDetections, currentCropObservations;
-        if (selectedCrop) {
-            currentCropDetections = detections.filter(d => d.planting_id === selectedCrop.planting_id);
-            currentCropObservations = observations.filter(o => o.planting_id === selectedCrop.planting_id);
-        } else {
-            currentCropDetections = detections;
-            currentCropObservations = observations;
-        }
-        
-        analyticsContainer.innerHTML = generateAnalyticsHTML(currentCropDetections, logs, currentCropObservations);
-        
-        if (window.Chart) {
-            renderAnalyticsCharts(currentCropDetections, logs, currentCropObservations);
-        }
-        
     } catch (error) {
-        console.error('Error loading analytics:', error);
-        analyticsContainer.innerHTML = `
-            <div class="error-state">
-                <i class="bi bi-exclamation-triangle"></i>
-                <h4>Error Loading Analytics</h4>
-                <p>Could not load data. Please try again.</p>
-                <button class="btn btn-outline" onclick="loadAnalytics()">
-                    <i class="bi bi-arrow-clockwise"></i> Retry
-                </button>
-            </div>
-        `;
-    }
-}
-
-function generateAnalyticsHTML(detections, logs, observations) {
-    const totalDetections = detections.length + logs.length + observations.length;
-    const pestDetections = detections.filter(d => d.pest_level !== 'none').length + 
-                          observations.filter(o => o.pest_level && o.pest_level !== 'low').length;
-    const diseaseDetections = detections.filter(d => d.disease !== 'none').length + 
-                             observations.filter(o => o.disease_observed).length;
-    const healthyDays = 30 - Math.min(totalDetections, 30);
-    
-    const cropName = selectedCrop ? selectedCrop.crop_type : 'All Crops';
-    
-    return `
-        <div class="analytics-container">
-            <div class="analytics-header">
-                <h3><i class="bi bi-graph-up"></i> Crop Analytics</h3>
-                <p>Insights for ${cropName}</p>
-                ${!selectedCrop ? '<p class="text-muted"><small>Showing data for all crops</small></p>' : ''}
-            </div>
-            
-            <div class="stats-grid">
-                <div class="stat-card">
-                    <div class="stat-icon" style="background-color: #3498db">
-                        <i class="bi bi-clipboard-data"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h4>${totalDetections}</h4>
-                        <p>Total Observations</p>
-                    </div>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-icon" style="background-color: #e74c3c">
-                        <i class="bi bi-bug"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h4>${pestDetections}</h4>
-                        <p>Pest Detections</p>
-                    </div>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-icon" style="background-color: #f39c12">
-                        <i class="bi bi-droplet"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h4>${diseaseDetections}</h4>
-                        <p>Disease Cases</p>
-                    </div>
-                </div>
-                
-                <div class="stat-card">
-                    <div class="stat-icon" style="background-color: #2ecc71">
-                        <i class="bi bi-check-circle"></i>
-                    </div>
-                    <div class="stat-content">
-                        <h4>${healthyDays}</h4>
-                        <p>Healthy Days</p>
-                    </div>
-                </div>
-            </div>
-            
-            <div class="charts-container">
-                <div class="chart-wrapper">
-                    <h4><i class="bi bi-bar-chart"></i> Detection History</h4>
-                    <canvas id="detectionChart" width="400" height="200"></canvas>
-                </div>
-                
-                <div class="chart-wrapper">
-                    <h4><i class="bi bi-pie-chart"></i> Problem Distribution</h4>
-                    <canvas id="problemChart" width="400" height="200"></canvas>
-                </div>
-            </div>
-            
-            <div class="recent-activity">
-                <h4><i class="bi bi-clock-history"></i> Recent Activity</h4>
-                <div class="activity-list">
-                    ${generateActivityList(detections, logs, observations)}
-                </div>
-            </div>
-            
-            <div class="analytics-actions">
-                <button class="btn btn-primary" onclick="exportAnalyticsData()">
-                    <i class="bi bi-download"></i> Export Data
-                </button>
-                <button class="btn btn-outline" onclick="clearAnalyticsData()">
-                    <i class="bi bi-trash"></i> Clear History
-                </button>
-            </div>
-        </div>
-    `;
-}
-
-function generateActivityList(detections, logs, observations) {
-    const allActivities = [
-        ...detections.map(d => ({ ...d, type: 'manual_detection' })),
-        ...logs.map(l => ({ ...l, type: 'automatic_detection' })),
-        ...observations.map(o => ({ ...o, type: 'observation' }))
-    ].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp))
-     .slice(0, 10);
-    
-    if (allActivities.length === 0) {
-        return '<div class="no-activity">No activity recorded yet.</div>';
-    }
-    
-    return allActivities.map(activity => {
-        const date = new Date(activity.timestamp);
-        const timeAgo = getTimeAgo(date);
-        
-        let description = '';
-        let icon = 'bi-info-circle';
-        
-        if (activity.type === 'manual_detection') {
-            description = `Manual observation: ${activity.pest_level} pests, ${activity.disease} disease`;
-            icon = 'bi-eye';
-        } else if (activity.type === 'automatic_detection') {
-            description = 'Automatic image analysis completed';
-            icon = 'bi-camera';
-        } else if (activity.type === 'observation') {
-            description = `Observation: ${activity.notes?.substring(0, 50) || 'No notes'}`;
-            icon = 'bi-journal-text';
-        }
-        
-        return `
-            <div class="activity-item">
-                <div class="activity-icon">
-                    <i class="bi ${icon}"></i>
-                </div>
-                <div class="activity-content">
-                    <div class="activity-title">${description}</div>
-                    <div class="activity-time">${timeAgo}</div>
-                </div>
-            </div>
-        `;
-    }).join('');
-}
-
-function renderAnalyticsCharts(detections, logs, observations) {
-    const detectionCtx = document.getElementById('detectionChart')?.getContext('2d');
-    if (detectionCtx) {
-        const last30Days = Array.from({length: 30}, (_, i) => {
-            const date = new Date();
-            date.setDate(date.getDate() - (29 - i));
-            return date.toISOString().split('T')[0];
-        });
-        
-        const dailyCounts = last30Days.map(date => {
-            return detections.filter(d => 
-                d.timestamp && d.timestamp.startsWith(date)
-            ).length + observations.filter(o =>
-                o.timestamp && o.timestamp.startsWith(date)
-            ).length;
-        });
-        
-        new Chart(detectionCtx, {
-            type: 'line',
-            data: {
-                labels: last30Days.map(d => new Date(d).getDate()),
-                datasets: [{
-                    label: 'Daily Observations',
-                    data: dailyCounts,
-                    borderColor: '#3498db',
-                    backgroundColor: 'rgba(52, 152, 219, 0.1)',
-                    tension: 0.4,
-                    fill: true
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: {
-                        display: false
-                    }
-                },
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        title: {
-                            display: true,
-                            text: 'Number of Observations'
-                        }
-                    },
-                    x: {
-                        title: {
-                            display: true,
-                            text: 'Day of Month'
-                        }
-                    }
-                }
-            }
-        });
-    }
-    
-    const problemCtx = document.getElementById('problemChart')?.getContext('2d');
-    if (problemCtx) {
-        const pestCount = detections.filter(d => d.pest_level !== 'none').length + 
-                         observations.filter(o => o.pest_level && o.pest_level !== 'low').length;
-        const diseaseCount = detections.filter(d => d.disease !== 'none').length + 
-                           observations.filter(o => o.disease_observed).length;
-        const healthyCount = detections.length + observations.length - (pestCount + diseaseCount);
-        
-        new Chart(problemCtx, {
-            type: 'doughnut',
-            data: {
-                labels: ['Pest Issues', 'Disease Issues', 'Healthy'],
-                datasets: [{
-                    data: [pestCount, diseaseCount, healthyCount],
-                    backgroundColor: [
-                        '#e74c3c',
-                        '#f39c12',
-                        '#2ecc71'
-                    ]
-                }]
-            },
-            options: {
-                responsive: true,
-                plugins: {
-                    legend: {
-                        position: 'bottom'
-                    }
-                }
-            }
-        });
-    }
-}
-
-function getTimeAgo(date) {
-    const seconds = Math.floor((new Date() - date) / 1000);
-    
-    let interval = Math.floor(seconds / 31536000);
-    if (interval >= 1) return interval + ' year' + (interval === 1 ? '' : 's') + ' ago';
-    
-    interval = Math.floor(seconds / 2592000);
-    if (interval >= 1) return interval + ' month' + (interval === 1 ? '' : 's') + ' ago';
-    
-    interval = Math.floor(seconds / 86400);
-    if (interval >= 1) return interval + ' day' + (interval === 1 ? '' : 's') + ' ago';
-    
-    interval = Math.floor(seconds / 3600);
-    if (interval >= 1) return interval + ' hour' + (interval === 1 ? '' : 's') + ' ago';
-    
-    interval = Math.floor(seconds / 60);
-    if (interval >= 1) return interval + ' minute' + (interval === 1 ? '' : 's') + ' ago';
-    
-    return Math.floor(seconds) + ' second' + (seconds === 1 ? '' : 's') + ' ago';
-}
-
-function exportAnalyticsData() {
-    const detections = JSON.parse(localStorage.getItem('cropDetections') || '[]');
-    const logs = JSON.parse(localStorage.getItem('detectionLogs') || '[]');
-    const observations = JSON.parse(localStorage.getItem('cropObservations') || '[]');
-    
-    let exportData;
-    if (selectedCrop) {
-        const currentDetections = detections.filter(d => d.planting_id === selectedCrop.planting_id);
-        const currentObservations = observations.filter(o => o.planting_id === selectedCrop.planting_id);
-        
-        exportData = {
-            crop: selectedCrop.crop_type,
-            planting_id: selectedCrop.planting_id,
-            export_date: new Date().toISOString(),
-            detections: currentDetections,
-            observations: currentObservations,
-            automatic_logs: logs.filter(l => l.planting_id === selectedCrop.planting_id)
-        };
-    } else {
-        exportData = {
-            crop: 'All Crops',
-            export_date: new Date().toISOString(),
-            detections: detections,
-            observations: observations,
-            automatic_logs: logs,
-            user_crops: userCrops
-        };
-    }
-    
-    const dataStr = JSON.stringify(exportData, null, 2);
-    const dataUri = 'data:application/json;charset=utf-8,'+ encodeURIComponent(dataStr);
-    
-    const exportFileDefaultName = `crop_analytics_${selectedCrop ? selectedCrop.crop_type : 'all_crops'}_${new Date().toISOString().split('T')[0]}.json`;
-    
-    const linkElement = document.createElement('a');
-    linkElement.setAttribute('href', dataUri);
-    linkElement.setAttribute('download', exportFileDefaultName);
-    linkElement.click();
-    
-    showNotification('success', 'Data Exported', 'Analytics data downloaded as JSON.');
-}
-
-function clearAnalyticsData() {
-    if (confirm('Are you sure you want to clear analytics data? This cannot be undone.')) {
-        if (selectedCrop) {
-            const allDetections = JSON.parse(localStorage.getItem('cropDetections') || '[]');
-            const allObservations = JSON.parse(localStorage.getItem('cropObservations') || '[]');
-            
-            const filteredDetections = allDetections.filter(d => d.planting_id !== selectedCrop.planting_id);
-            const filteredObservations = allObservations.filter(o => o.planting_id !== selectedCrop.planting_id);
-            
-            localStorage.setItem('cropDetections', JSON.stringify(filteredDetections));
-            localStorage.setItem('cropObservations', JSON.stringify(filteredObservations));
-            
-            showNotification('info', 'Data Cleared', 'Analytics data has been removed for this crop.');
-        } else {
-            localStorage.removeItem('cropDetections');
-            localStorage.removeItem('cropObservations');
-            localStorage.removeItem('detectionLogs');
-            
-            showNotification('info', 'All Data Cleared', 'All analytics data has been removed.');
-        }
-        
-        loadAnalytics();
+        console.error('Error logging detection:', error);
+        showNotification('warning', 'Logged Locally', 'Saved detection locally.');
     }
 }
 
@@ -3062,36 +3089,43 @@ function initializeQuickActions() {
     
     quickActionsContainer.innerHTML = `
         <div class="quick-actions-grid">
-            <div class="quick-action-card water" onclick="handleQuickAction('water')">
+            <div class="quick-action-card water" id="quickWater">
                 <i class="bi bi-droplet"></i>
                 <div class="action-title">Water</div>
                 <div class="action-desc">Log watering activity</div>
             </div>
-            <div class="quick-action-card fertilize" onclick="handleQuickAction('fertilize')">
+            <div class="quick-action-card fertilize" id="quickFertilize">
                 <i class="bi bi-flower1"></i>
                 <div class="action-title">Fertilize</div>
                 <div class="action-desc">Record fertilization</div>
             </div>
-            <div class="quick-action-card inspect" onclick="handleQuickAction('inspect')">
+            <div class="quick-action-card inspect" id="quickInspect">
                 <i class="bi bi-camera"></i>
                 <div class="action-title">Inspect</div>
                 <div class="action-desc">Upload crop image</div>
             </div>
-            <div class="quick-action-card note" onclick="handleQuickAction('note')">
+            <div class="quick-action-card note" id="quickNote">
                 <i class="bi bi-journal-text"></i>
                 <div class="action-title">Note</div>
                 <div class="action-desc">Add observation</div>
             </div>
-            <div class="quick-action-card harvest" onclick="handleQuickAction('harvest')">
+            <div class="quick-action-card harvest" id="quickHarvest">
                 <i class="bi bi-basket"></i>
                 <div class="action-title">Harvest</div>
                 <div class="action-desc">Mark as harvested</div>
             </div>
         </div>
     `;
+    
+    // Add event listeners
+    document.getElementById('quickWater').addEventListener('click', () => handleQuickAction('water'));
+    document.getElementById('quickFertilize').addEventListener('click', () => handleQuickAction('fertilize'));
+    document.getElementById('quickInspect').addEventListener('click', () => handleQuickAction('inspect'));
+    document.getElementById('quickNote').addEventListener('click', () => handleQuickAction('note'));
+    document.getElementById('quickHarvest').addEventListener('click', () => handleQuickAction('harvest'));
 }
 
-function handleQuickAction(action) {
+async function handleQuickAction(action) {
     if (!selectedCrop && action !== 'inspect') {
         showNotification('warning', 'No Crop Selected', 'Please select a crop first.');
         return;
@@ -3099,12 +3133,12 @@ function handleQuickAction(action) {
     
     switch(action) {
         case 'water':
-            logQuickAction('water', 'Watered crop as per schedule');
+            await logQuickAction('water', 'Watered crop as per schedule');
             showNotification('success', 'Watering Logged', 'Watering activity recorded.');
             break;
             
         case 'fertilize':
-            logQuickAction('fertilize', 'Applied fertilizer');
+            await logQuickAction('fertilize', 'Applied fertilizer');
             showNotification('success', 'Fertilization Logged', 'Fertilizer application recorded.');
             break;
             
@@ -3118,13 +3152,13 @@ function handleQuickAction(action) {
             
         case 'harvest':
             if (confirm('Are you ready to harvest this crop? This will mark it as completed.')) {
-                markAsHarvested();
+                await markAsHarvested();
             }
             break;
     }
 }
 
-function logQuickAction(type, description) {
+async function logQuickAction(type, description) {
     if (!selectedCrop) return;
     
     const action = {
@@ -3137,6 +3171,9 @@ function logQuickAction(type, description) {
     const actions = JSON.parse(localStorage.getItem('quickActions') || '[]');
     actions.push(action);
     localStorage.setItem('quickActions', JSON.stringify(actions));
+    
+    // Save progress to Supabase
+    await saveUserProgressToSupabase();
 }
 
 function showQuickNoteModal() {
@@ -3146,23 +3183,28 @@ function showQuickNoteModal() {
         <div class="modal quick-note-modal">
             <div class="modal-header">
                 <h4><i class="bi bi-journal-text"></i> Add Quick Note</h4>
-                <button class="btn-close" onclick="this.closest('.modal-overlay').remove()">&times;</button>
+                <button class="btn-close" id="closeNoteModal">&times;</button>
             </div>
             <div class="modal-body">
                 <textarea id="quickNoteText" class="form-textarea" 
                           placeholder="Enter your observation note here..." rows="4"></textarea>
             </div>
             <div class="modal-footer">
-                <button class="btn btn-outline" onclick="this.closest('.modal-overlay').remove()">Cancel</button>
-                <button class="btn btn-primary" onclick="saveQuickNote()">Save Note</button>
+                <button class="btn btn-outline" id="cancelNote">Cancel</button>
+                <button class="btn btn-primary" id="saveNote">Save Note</button>
             </div>
         </div>
     `;
     
     document.body.appendChild(modal);
+    
+    // Add event listeners
+    document.getElementById('closeNoteModal').addEventListener('click', () => modal.remove());
+    document.getElementById('cancelNote').addEventListener('click', () => modal.remove());
+    document.getElementById('saveNote').addEventListener('click', saveQuickNote);
 }
 
-function saveQuickNote() {
+async function saveQuickNote() {
     const noteText = document.getElementById('quickNoteText').value;
     if (!noteText.trim()) {
         alert('Please enter a note');
@@ -3179,18 +3221,20 @@ function saveQuickNote() {
     notes.push(note);
     localStorage.setItem('cropNotes', JSON.stringify(notes));
     
+    // Save progress to Supabase
+    await saveUserProgressToSupabase();
+    
     document.querySelector('.modal-overlay').remove();
-    showNotification('success', 'Note Saved', 'Observation note added successfully.');
+    showNotification('success', 'Note Saved', 'Observation note added to your account.');
 }
 
-function markAsHarvested() {
+async function markAsHarvested() {
     if (!selectedCrop) return;
     
     const cropIndex = userCrops.findIndex(c => c.planting_id === selectedCrop.planting_id);
     if (cropIndex !== -1) {
         userCrops[cropIndex].harvested = true;
         userCrops[cropIndex].harvest_date = new Date().toISOString();
-        localStorage.setItem('userCrops', JSON.stringify(userCrops));
     }
     
     userCrops = userCrops.filter(c => c.planting_id !== selectedCrop.planting_id);
@@ -3198,6 +3242,9 @@ function markAsHarvested() {
     const wasSelected = selectedCrop;
     selectedCrop = null;
     currentPlantingId = null;
+    
+    // Save progress to Supabase
+    await saveUserProgressToSupabase();
     
     updateDashboardWithAllCrops();
     navigateToPage('home');
@@ -3265,11 +3312,14 @@ function showNotification(type, title, message) {
             <div class="notification-title">${title}</div>
             <div class="notification-message">${message}</div>
         </div>
-        <button class="notification-close" onclick="this.parentElement.remove()">&times;</button>
+        <button class="notification-close">&times;</button>
     `;
     
     const container = document.getElementById('notificationContainer') || createNotificationContainer();
     container.appendChild(notification);
+    
+    // Add event listener to close button
+    notification.querySelector('.notification-close').addEventListener('click', () => notification.remove());
     
     setTimeout(() => {
         if (notification.parentElement) {
@@ -3320,1050 +3370,52 @@ function calculateProgress(startDate, totalDays) {
 }
 
 // ---------------------
-// "LOGOUT" FUNCTION
+// ADD CSS FOR MODEL BADGES
 // ---------------------
-function logout() {
-    showLoginModal();
-}
-
-// ---------------------
-// ADD ALL STYLES
-// ---------------------
-const allStyles = document.createElement('style');
-allStyles.textContent = `
-    /* Navigation fixes */
-    #side_nav {
-        transition: transform 0.3s ease-in-out;
-        z-index: 1000;
-    }
-    
-    #side_nav.active {
-        transform: translateX(0);
-    }
-    
-    /* For mobile navigation */
-    @media (max-width: 768px) {
-        #side_nav:not(.active) {
-            transform: translateX(-100%);
-        }
-        
-        .mobile-nav-overlay {
-            display: none;
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0, 0, 0, 0.5);
-            z-index: 998;
-        }
-        
-        .mobile-nav-overlay.active {
-            display: block;
-        }
-    }
-    
-    /* Menu toggle button */
-    #menuToggle {
-        background: none;
-        border: none;
-        font-size: 24px;
-        color: #333;
-        cursor: pointer;
-        padding: 8px;
-        border-radius: 4px;
-        transition: background-color 0.2s;
-    }
-    
-    #menuToggle:hover {
-        background-color: rgba(0, 0, 0, 0.05);
-    }
-    
-    /* Close nav button */
-    #closeNav {
-        position: absolute;
-        top: 15px;
-        right: 15px;
-        background: none;
-        border: none;
-        font-size: 24px;
-        color: #666;
-        cursor: pointer;
-        display: none;
-    }
-    
-    @media (max-width: 768px) {
-        #closeNav {
-            display: block;
-        }
-    }
-    
-    /* Nav items styling */
-    .nav-item {
-        display: flex;
-        align-items: center;
-        padding: 12px 20px;
-        color: #333;
-        text-decoration: none;
-        border-radius: 8px;
-        margin: 4px 0;
-        transition: all 0.2s;
-        cursor: pointer;
-    }
-    
-    .nav-item:hover {
-        background-color: rgba(52, 152, 219, 0.1);
-        color: #3498db;
-    }
-    
-    .nav-item.active {
-        background-color: #3498db;
+const modelStyles = document.createElement('style');
+modelStyles.textContent = `
+    .model-badge {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
         color: white;
-    }
-    
-    .nav-item i {
-        margin-right: 12px;
-        font-size: 18px;
-    }
-    
-    /* Ensure pages are hidden by default */
-    .page {
-        display: none;
-    }
-    
-    .page.active {
-        display: block;
-    }
-    
-    /* Progress animation */
-    .progress-animate {
-        transition: width 1s ease-in-out;
-    }
-    
-    /* Notifications */
-    .notification-container {
-        position: fixed;
-        top: 20px;
-        right: 20px;
-        z-index: 9999;
-    }
-    
-    .notification {
-        background: white;
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-        padding: 16px;
-        margin-bottom: 10px;
-        display: flex;
-        align-items: flex-start;
-        min-width: 300px;
-        max-width: 400px;
-        border-left: 4px solid;
-        animation: slideIn 0.3s ease-out;
-    }
-    
-    .notification-success {
-        border-left-color: #2ecc71;
-    }
-    
-    .notification-error {
-        border-left-color: #e74c3c;
-    }
-    
-    .notification-warning {
-        border-left-color: #f39c12;
-    }
-    
-    .notification-info {
-        border-left-color: #3498db;
-    }
-    
-    .notification-icon {
-        margin-right: 12px;
-        font-size: 20px;
-    }
-    
-    .notification-success .notification-icon {
-        color: #2ecc71;
-    }
-    
-    .notification-content {
-        flex: 1;
-    }
-    
-    .notification-title {
+        padding: 4px 12px;
+        border-radius: 20px;
+        font-size: 12px;
         font-weight: 600;
-        margin-bottom: 4px;
-    }
-    
-    .notification-message {
-        color: #666;
-        font-size: 14px;
-    }
-    
-    .notification-close {
-        background: none;
-        border: none;
-        font-size: 20px;
-        color: #999;
-        cursor: pointer;
-        padding: 0;
-        margin-left: 8px;
-    }
-    
-    @keyframes slideIn {
-        from {
-            transform: translateX(100%);
-            opacity: 0;
-        }
-        to {
-            transform: translateX(0);
-            opacity: 1;
-        }
-    }
-    
-    /* Loading states */
-    .loading-analysis, .loading-analytics {
-        text-align: center;
-        padding: 40px 20px;
-    }
-    
-    .spinner {
-        width: 40px;
-        height: 40px;
-        border: 4px solid #f3f3f3;
-        border-top: 4px solid #3498db;
-        border-radius: 50%;
-        animation: spin 1s linear infinite;
-        margin: 0 auto 20px;
-    }
-    
-    @keyframes spin {
-        0% { transform: rotate(0deg); }
-        100% { transform: rotate(360deg); }
-    }
-    
-    /* Empty states */
-    .empty-state {
-        text-align: center;
-        padding: 60px 20px;
-        color: #666;
-    }
-    
-    .empty-state i {
-        font-size: 48px;
-        color: #ddd;
-        margin-bottom: 16px;
-    }
-    
-    /* Image preview */
-    .image-preview {
-        position: relative;
-        border-radius: 8px;
-        overflow: hidden;
-        margin-bottom: 20px;
-    }
-    
-    .image-preview img {
-        width: 100%;
-        height: 200px;
-        object-fit: cover;
-    }
-    
-    .preview-overlay {
-        position: absolute;
-        bottom: 0;
-        left: 0;
-        right: 0;
-        background: rgba(0,0,0,0.7);
-        color: white;
-        padding: 8px;
-        text-align: center;
-        font-size: 14px;
-    }
-    
-    /* Manual analysis form */
-    .manual-form {
-        background: #f8f9fa;
-        padding: 20px;
-        border-radius: 8px;
-        margin-top: 20px;
-    }
-    
-    .form-group {
-        margin-bottom: 16px;
-    }
-    
-    .form-group label {
-        display: block;
-        margin-bottom: 6px;
-        font-weight: 500;
-        color: #333;
-    }
-    
-    .form-select, .form-textarea {
-        width: 100%;
-        padding: 10px;
-        border: 1px solid #ddd;
-        border-radius: 6px;
-        font-size: 14px;
-        font-family: inherit;
-    }
-    
-    .form-textarea {
-        resize: vertical;
-        min-height: 80px;
-    }
-    
-    .form-actions {
-        display: flex;
-        gap: 10px;
-        margin-top: 20px;
-    }
-    
-    /* Detection results */
-    .detection-results {
-        background: white;
-        border-radius: 8px;
-        padding: 20px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-    
-    .result-item {
-        padding: 12px;
-        margin-bottom: 10px;
-        border-radius: 6px;
-        background: #f8f9fa;
-    }
-    
-    .result-item.problem {
-        background: #fff3cd;
-        border-left: 4px solid #f39c12;
-    }
-    
-    .result-item.healthy {
-        background: #d1ecf1;
-        border-left: 4px solid #17a2b8;
-    }
-    
-    .result-header {
-        display: flex;
+        display: inline-flex;
         align-items: center;
-        margin-bottom: 8px;
+        gap: 5px;
+        margin-left: 10px;
     }
     
-    .result-header i {
-        margin-right: 8px;
-        font-size: 18px;
-    }
-    
-    .confidence-bar {
-        height: 6px;
-        background: #e9ecef;
-        border-radius: 3px;
-        overflow: hidden;
-        margin: 8px 0;
-    }
-    
-    .confidence-fill {
-        height: 100%;
-        background: #3498db;
-        transition: width 0.3s ease;
-    }
-    
-    .result-actions {
-        display: flex;
-        gap: 10px;
-        margin-top: 20px;
-    }
-    
-    /* Analytics */
-    .stats-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 16px;
-        margin: 24px 0;
-    }
-    
-    .stat-card {
-        background: white;
-        border-radius: 8px;
-        padding: 16px;
-        display: flex;
-        align-items: center;
-        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-    }
-    
-    .stat-icon {
-        width: 48px;
-        height: 48px;
-        border-radius: 8px;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin-right: 16px;
-        color: white;
-        font-size: 24px;
-    }
-    
-    .stat-content h4 {
-        font-size: 24px;
-        margin: 0;
-        color: #2c3e50;
-    }
-    
-    .stat-content p {
-        margin: 4px 0 0;
-        color: #7f8c8d;
-        font-size: 14px;
-    }
-    
-    .charts-container {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-        gap: 24px;
-        margin: 32px 0;
-    }
-    
-    .chart-wrapper {
-        background: white;
-        border-radius: 8px;
-        padding: 20px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-    }
-    
-    .activity-list {
-        margin-top: 16px;
-    }
-    
-    .activity-item {
-        display: flex;
-        align-items: flex-start;
-        padding: 12px;
-        border-bottom: 1px solid #eee;
-    }
-    
-    .activity-item:last-child {
-        border-bottom: none;
-    }
-    
-    .activity-icon {
-        width: 36px;
-        height: 36px;
-        border-radius: 50%;
-        background: #f8f9fa;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        margin-right: 12px;
-        color: #3498db;
-    }
-    
-    .activity-title {
-        font-weight: 500;
-        margin-bottom: 4px;
-    }
-    
-    .activity-time {
-        font-size: 12px;
-        color: #95a5a6;
-    }
-    
-    /* Dashboard styles */
-    .dashboard-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 20px;
-        padding-bottom: 10px;
-        border-bottom: 1px solid #eee;
-    }
-    
-    .crops-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
-        gap: 20px;
-        margin-top: 20px;
-    }
-    
-    .dashboard-crop-card {
-        background: white;
-        border-radius: 12px;
-        padding: 16px;
-        box-shadow: 0 2px 8px rgba(0,0,0,0.1);
-        border: 2px solid transparent;
-        transition: all 0.3s ease;
-        cursor: pointer;
-    }
-    
-    .dashboard-crop-card:hover {
-        transform: translateY(-4px);
-        box-shadow: 0 4px 16px rgba(0,0,0,0.15);
-        border-color: #3498db;
-    }
-    
-    .dashboard-crop-card.selected {
-        border-color: #2ecc71;
-        background: #f8f9fa;
-    }
-    
-    .crop-card-header {
-        display: flex;
-        align-items: center;
-        gap: 12px;
-        margin-bottom: 16px;
-    }
-    
-    .crop-card-header i {
-        font-size: 24px;
-        color: #2ecc71;
-    }
-    
-    .crop-age {
-        font-size: 12px;
-        color: #7f8c8d;
-        background: #f1f2f6;
+    .model-badge-small {
+        background: #e3f2fd;
+        color: #1976d2;
         padding: 2px 8px;
-        border-radius: 10px;
+        border-radius: 12px;
+        font-size: 10px;
+        font-weight: 600;
         display: inline-block;
         margin-top: 4px;
     }
     
-    .crop-progress {
-        display: flex;
-        align-items: center;
-        gap: 10px;
-        margin-bottom: 16px;
+    .model-badge .bi {
+        font-size: 10px;
     }
     
-    .crop-details {
-        background: #f8f9fa;
-        padding: 12px;
-        border-radius: 8px;
-        margin-bottom: 16px;
-    }
-    
-    .detail-row {
-        display: flex;
-        justify-content: space-between;
-        margin-bottom: 6px;
-        font-size: 14px;
-    }
-    
-    .detail-row:last-child {
-        margin-bottom: 0;
-    }
-    
-    .crop-actions {
-        display: flex;
-        gap: 8px;
-        justify-content: flex-end;
-    }
-    
-    /* Crop detail view */
-    .crop-detail-view {
-        background: white;
-        border-radius: 12px;
-        padding: 20px;
-    }
-    
-    .detail-header {
-        display: flex;
-        align-items: center;
-        gap: 15px;
-        margin-bottom: 24px;
-    }
-    
-    .detail-main {
-        display: flex;
-        flex-direction: column;
-        gap: 24px;
-    }
-    
-    .detail-stats {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
-        gap: 15px;
-    }
-    
-    .stat-box {
-        background: #f8f9fa;
-        border-radius: 10px;
-        padding: 15px;
-        text-align: center;
-    }
-    
-    .stat-value {
-        font-size: 28px;
-        font-weight: bold;
-        color: #2c3e50;
-        margin-bottom: 4px;
-    }
-    
-    .stat-label {
-        font-size: 12px;
-        color: #7f8c8d;
-        text-transform: uppercase;
-        letter-spacing: 0.5px;
-    }
-    
-    .progress-section {
-        background: #f8f9fa;
-        border-radius: 10px;
-        padding: 16px;
-    }
-    
-    .progress-bar-large {
-        height: 20px;
-        background: #e9ecef;
-        border-radius: 10px;
-        overflow: hidden;
-        margin: 10px 0;
-    }
-    
-    .detail-section {
-        background: #f8f9fa;
-        border-radius: 10px;
-        padding: 16px;
-    }
-    
-    .detail-section h4 {
-        margin-bottom: 12px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: #2c3e50;
-    }
-    
-    /* Timeline */
-    .timeline {
-        position: relative;
-        padding-left: 30px;
-    }
-    
-    .timeline::before {
-        content: '';
-        position: absolute;
-        left: 10px;
-        top: 0;
-        bottom: 0;
-        width: 2px;
-        background: #3498db;
-    }
-    
-    .timeline-item {
-        position: relative;
-        margin-bottom: 20px;
-    }
-    
-    .timeline-dot {
-        position: absolute;
-        left: -25px;
-        top: 0;
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        background: #3498db;
-        border: 2px solid white;
-    }
-    
-    .timeline-dot.harvest {
-        background: #2ecc71;
-    }
-    
-    .timeline-date {
-        font-size: 12px;
-        color: #7f8c8d;
-        margin-bottom: 4px;
-    }
-    
-    .timeline-content {
-        background: white;
-        padding: 10px;
-        border-radius: 6px;
-        border-left: 3px solid #3498db;
-    }
-    
-    /* Planting calendar popup */
-    .planting-calendar-modal {
-        max-width: 400px;
-    }
-    
-    .calendar-popup {
-        background: white;
-        border-radius: 8px;
-        padding: 15px;
-        margin: 15px 0;
-    }
-    
-    .calendar-popup-header {
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        margin-bottom: 15px;
-    }
-    
-    .calendar-popup-weekdays {
-        display: grid;
-        grid-template-columns: repeat(7, 1fr);
-        text-align: center;
-        font-size: 12px;
-        color: #7f8c8d;
-        margin-bottom: 10px;
-    }
-    
-    .calendar-popup-days {
-        display: grid;
-        grid-template-columns: repeat(7, 1fr);
-        gap: 5px;
-    }
-    
-    .calendar-popup-day {
-        aspect-ratio: 1;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        border-radius: 6px;
-        cursor: pointer;
-        font-size: 14px;
-        position: relative;
-        transition: all 0.2s;
-    }
-    
-    .calendar-popup-day:hover:not(.empty):not(.past):not(.future) {
-        background: #e3f2fd;
-    }
-    
-    .calendar-popup-day.selected {
-        background: #3498db;
-        color: white;
-    }
-    
-    .calendar-popup-day.past {
-        color: #ccc;
-        cursor: not-allowed;
-    }
-    
-    .calendar-popup-day.future {
-        color: #999;
-        cursor: not-allowed;
-    }
-    
-    .calendar-popup-day.today {
-        background: #f0f7ff;
-        color: #3498db;
-        font-weight: bold;
-    }
-    
-    .calendar-popup-day.empty {
-        visibility: hidden;
-    }
-    
-    .today-badge {
-        position: absolute;
-        top: -5px;
-        right: -5px;
-        background: #2ecc71;
-        color: white;
+    .model-badge-small .bi {
         font-size: 8px;
-        padding: 1px 4px;
-        border-radius: 3px;
+        margin-right: 2px;
     }
     
-    .selected-date-display {
-        background: #f8f9fa;
-        padding: 12px;
-        border-radius: 8px;
-        margin-top: 15px;
-        display: flex;
-        align-items: center;
-        gap: 10px;
-    }
-    
-    .selected-date-label {
-        font-weight: 500;
-        color: #7f8c8d;
-    }
-    
-    .selected-date-value {
-        font-weight: bold;
-        color: #2c3e50;
-        flex: 1;
-    }
-    
-    .weather-check {
-        display: flex;
-        align-items: center;
-        gap: 8px;
-        color: #7f8c8d;
-        font-size: 14px;
-        margin-top: 10px;
-    }
-    
-    .weather-check i {
-        color: #f39c12;
-    }
-    
-    /* Quick actions */
-    .quick-actions-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-        gap: 15px;
-        margin-top: 20px;
-    }
-    
-    .quick-action-card {
-        background: white;
-        border-radius: 10px;
-        padding: 15px;
-        text-align: center;
-        cursor: pointer;
-        transition: all 0.3s;
-        border: 1px solid #eee;
-    }
-    
-    .quick-action-card:hover {
-        transform: translateY(-3px);
-        box-shadow: 0 4px 12px rgba(0,0,0,0.1);
-        border-color: #3498db;
-    }
-    
-    .quick-action-card i {
-        font-size: 32px;
-        margin-bottom: 10px;
-        display: block;
-    }
-    
-    .quick-action-card.water i { color: #3498db; }
-    .quick-action-card.fertilize i { color: #2ecc71; }
-    .quick-action-card.inspect i { color: #f39c12; }
-    .quick-action-card.note i { color: #9b59b6; }
-    .quick-action-card.harvest i { color: #e74c3c; }
-    
-    /* Growth stage indicators */
-    .growth-stage-seedling {
-        background: #d1ecf1;
-        color: #0c5460;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: 12px;
-    }
-    
-    .growth-stage-vegetative {
-        background: #d4edda;
-        color: #155724;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: 12px;
-    }
-    
-    .growth-stage-flowering {
-        background: #fff3cd;
-        color: #856404;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: 12px;
-    }
-    
-    .growth-stage-mature {
-        background: #f8d7da;
-        color: #721c24;
-        padding: 2px 8px;
-        border-radius: 4px;
-        font-size: 12px;
-    }
-    
-    /* Plant cards */
-    .plant-card .btn-plant {
-        margin-top: 12px;
-        padding: 8px 16px;
-        background: #2ecc71;
+    .context-item:last-child {
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
         color: white;
-        border: none;
-        border-radius: 6px;
-        font-weight: 500;
-        cursor: pointer;
-        transition: background 0.2s;
     }
     
-    .plant-card .btn-plant:hover {
-        background: #27ae60;
-    }
-    
-    .plant-card.selected {
-        border-color: #3498db;
-        box-shadow: 0 0 0 2px rgba(52, 152, 219, 0.3);
-    }
-    
-    /* Fertilizer Recommendation Styles */
-    .fert-form-container {
-        background: white;
-        padding: 20px;
-        border-radius: 10px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-        margin-bottom: 20px;
-    }
-    
-    .fert-result-card {
-        background: white;
-        border-radius: 10px;
-        padding: 25px;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.1);
-        margin-top: 20px;
-    }
-    
-    .result-header {
-        text-align: center;
-        margin-bottom: 25px;
-        padding-bottom: 15px;
-        border-bottom: 2px solid #f0f0f0;
-    }
-    
-    .result-header h3 {
-        color: #2c3e50;
-        margin-bottom: 10px;
-    }
-    
-    .result-context {
-        display: flex;
-        justify-content: center;
-        gap: 20px;
-        flex-wrap: wrap;
-    }
-    
-    .context-item {
-        background: #f8f9fa;
-        padding: 6px 15px;
-        border-radius: 20px;
-        font-size: 14px;
-        color: #495057;
-        display: flex;
-        align-items: center;
-        gap: 6px;
-    }
-    
-    .fertilizer-main {
-        margin: 25px 0;
-    }
-    
-    .fertilizer-name-box {
-        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-        color: white;
-        padding: 25px;
-        border-radius: 10px;
-        display: flex;
-        align-items: center;
-        gap: 20px;
-        margin-bottom: 25px;
-    }
-    
-    .fertilizer-name-box i {
-        font-size: 40px;
-    }
-    
-    .fertilizer-name-box h2 {
-        margin: 0;
-        font-size: 28px;
-        line-height: 1.3;
-    }
-    
-    .fertilizer-type {
-        margin: 5px 0 0;
-        opacity: 0.9;
-        font-size: 16px;
-    }
-    
-    .recommendation-reason,
-    .application-details,
-    .fertilizer-notes {
-        background: #f8f9fa;
-        padding: 18px;
-        border-radius: 8px;
-        margin-bottom: 18px;
-        border-left: 4px solid #3498db;
-    }
-    
-    .recommendation-reason h4,
-    .application-details h4,
-    .fertilizer-notes h4 {
-        color: #2c3e50;
-        margin-bottom: 12px;
-        display: flex;
-        align-items: center;
-        gap: 8px;
-    }
-    
-    .details-grid {
-        display: grid;
-        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-        gap: 15px;
-        margin-top: 15px;
-    }
-    
-    .detail-box {
-        background: white;
-        padding: 12px;
-        border-radius: 6px;
-        border: 1px solid #e0e0e0;
-    }
-    
-    .detail-label {
-        display: block;
-        font-size: 12px;
-        color: #7f8c8d;
-        text-transform: uppercase;
-        margin-bottom: 4px;
-    }
-    
-    .detail-value {
-        font-weight: 600;
-        color: #2c3e50;
-        font-size: 16px;
-    }
-    
-    .result-actions {
-        display: flex;
-        gap: 15px;
-        justify-content: center;
-        margin-top: 25px;
-        padding-top: 20px;
-        border-top: 2px solid #f0f0f0;
-    }
-    
-    .alert {
-        padding: 12px 16px;
-        border-radius: 6px;
-        margin: 10px 0;
-    }
-    
-    .alert-warning {
-        background: #fff3cd;
-        border: 1px solid #ffeaa7;
-        color: #856404;
-    }
-    
-    .alert-error {
-        background: #f8d7da;
-        border: 1px solid #f5c6cb;
-        color: #721c24;
-    }
-    
-    @media (max-width: 768px) {
-        .fertilizer-name-box {
-            flex-direction: column;
-            text-align: center;
-            gap: 10px;
-        }
-        
-        .details-grid {
-            grid-template-columns: 1fr;
-        }
-        
-        .result-actions {
-            flex-direction: column;
-        }
+    .detail-header .model-badge {
+        background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
     }
 `;
-document.head.appendChild(allStyles);
+document.head.appendChild(modelStyles);
 
-console.log('Smart Crop System ready! (Calendar removed + Simplified Fertilizer System)');
+console.log('Smart Crop System ready! (With Supabase User Progress)');

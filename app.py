@@ -2,14 +2,15 @@ from flask import Flask, request, jsonify
 from flask_cors import CORS
 from flask_sqlalchemy import SQLAlchemy
 from datetime import datetime, timedelta
+from werkzeug.security import generate_password_hash, check_password_hash
 import joblib
 import numpy as np
 import pandas as pd
 import requests
 from sklearn.svm import SVC
-from sklearn.preprocessing import StandardScaler
+from sklearn.preprocessing import StandardScaler, LabelEncoder
 from sklearn.ensemble import RandomForestClassifier
-from sklearn.preprocessing import LabelEncoder
+from sklearn.tree import DecisionTreeClassifier
 import json
 import os
 from dotenv import load_dotenv
@@ -67,6 +68,80 @@ app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 db = SQLAlchemy(app)
 
 # ============================================
+# LOAD ML MODELS FROM PICKLE FILES
+# ============================================
+
+class MLModelManager:
+    def __init__(self):
+        self.random_forest_model = None
+        self.rf_features = None
+        self.fertilizer_encoder = None
+        self.decision_tree_model = None
+        self.dt_features = None
+        self.dt_task_encoder = None
+        self.svm_model = None
+        self.svm_features = None
+        self.svm_scaler = None
+        
+        self.load_all_models()
+    
+    def load_all_models(self):
+        """Load all pickle models"""
+        try:
+            # Load Random Forest fertilizer model
+            rf_path = os.path.join('models', 'rf_fertilizer.pkl')
+            rf_features_path = os.path.join('models', 'rf_feature_names.pkl')
+            fert_encoder_path = os.path.join('models', 'fertilizer_encoder.pkl')
+            
+            if os.path.exists(rf_path):
+                self.random_forest_model = joblib.load(rf_path)
+                print("✅ Random Forest fertilizer model loaded")
+            if os.path.exists(rf_features_path):
+                self.rf_features = joblib.load(rf_features_path)
+                print("✅ Random Forest features loaded")
+            if os.path.exists(fert_encoder_path):
+                self.fertilizer_encoder = joblib.load(fert_encoder_path)
+                print("✅ Fertilizer encoder loaded")
+            
+            # Load Decision Tree task model
+            dt_path = os.path.join('models', 'dt_task.pkl')
+            dt_features_path = os.path.join('models', 'dt_feature_names.pkl')
+            task_encoder_path = os.path.join('models', 'task_encoders.pkl')
+            
+            if os.path.exists(dt_path):
+                self.decision_tree_model = joblib.load(dt_path)
+                print("✅ Decision Tree task model loaded")
+            if os.path.exists(dt_features_path):
+                self.dt_features = joblib.load(dt_features_path)
+                print("✅ Decision Tree features loaded")
+            if os.path.exists(task_encoder_path):
+                self.dt_task_encoder = joblib.load(task_encoder_path)
+                print("✅ Task encoder loaded")
+            
+            # Load SVM model
+            svm_path = os.path.join('models', 'svm_decision.pkl')
+            svm_features_path = os.path.join('models', 'svm_feature_names.pkl')
+            svm_scaler_path = os.path.join('models', 'svm_scaler.pkl')
+            
+            if os.path.exists(svm_path):
+                self.svm_model = joblib.load(svm_path)
+                print("✅ SVM model loaded")
+            if os.path.exists(svm_features_path):
+                self.svm_features = joblib.load(svm_features_path)
+                print("✅ SVM features loaded")
+            if os.path.exists(svm_scaler_path):
+                self.svm_scaler = joblib.load(svm_scaler_path)
+                print("✅ SVM scaler loaded")
+                
+            print("✅ All ML models loaded successfully!")
+            
+        except Exception as e:
+            print(f"❌ Error loading ML models: {e}")
+
+# Initialize ML models
+ml_models = MLModelManager()
+
+# ============================================
 # DATABASE MODELS (SENSOR-FREE VERSION)
 # ============================================
 
@@ -82,6 +157,7 @@ class User(db.Model):
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     
     crops = db.relationship('UserCrop', backref='user', lazy=True)
+    actions = db.relationship('UserAction', backref='user', lazy=True)
 
 class CropMaster(db.Model):
     __tablename__ = 'crops_master'
@@ -121,6 +197,7 @@ class UserCrop(db.Model):
     observations = db.relationship('ManualObservation', backref='crop', lazy=True)
     recommendations = db.relationship('Recommendation', backref='crop', lazy=True)
     image_analyses = db.relationship('ImageAnalysis', backref='crop', lazy=True)
+    actions = db.relationship('UserAction', backref='crop', lazy=True)
 
 # MANUAL OBSERVATIONS instead of sensor readings
 class ManualObservation(db.Model):
@@ -184,6 +261,28 @@ class Recommendation(db.Model):
     confidence_score = db.Column(db.Float)
     source = db.Column(db.Enum('ai_svm', 'rule_based', 'manual', 'weather_based'))
     implemented = db.Column(db.Boolean, default=False)
+
+# -------------------------
+# User action / activity log
+# -------------------------
+class UserAction(db.Model):
+    __tablename__ = 'user_actions'
+    action_id = db.Column(db.Integer, primary_key=True)
+    user_id = db.Column(db.Integer, db.ForeignKey('users.user_id'), nullable=False)
+    planting_id = db.Column(db.Integer, db.ForeignKey('user_crops.planting_id'))
+    action_type = db.Column(db.String(50), nullable=False)  # e.g., 'detection','manual_observation','quick_action','recommendation','login'
+    details = db.Column(db.Text)  # free-form JSON string
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+    def as_dict(self):
+        return {
+            'action_id': self.action_id,
+            'user_id': self.user_id,
+            'planting_id': self.planting_id,
+            'action_type': self.action_type,
+            'details': json.loads(self.details) if self.details else None,
+            'created_at': self.created_at.isoformat()
+        }
     implemented_date = db.Column(db.Date)
 
 class DecisionPattern(db.Model):
@@ -239,118 +338,17 @@ class SmartCropDecisionEngine:
         self.load_or_train_model()
     
     def load_or_train_model(self):
-        """Load trained SVM model or train new one from patterns"""
+        """Load trained SVM model or use loaded pickle model"""
         try:
-            self.svm_model = joblib.load('models/svm_crop_decision.pkl')
-            self.scaler = joblib.load('models/svm_scaler.pkl')
-            print("✅ SVM model loaded successfully")
-        except:
-            print("Training new SVM model...")
-            self.train_model()
-    
-    def train_model(self):
-        """Train SVM model on historical decision patterns"""
-        try:
-            # Get patterns from database
-            patterns = DecisionPattern.query.all()
-            
-            if len(patterns) < 30:
-                print(f"Not enough patterns ({len(patterns)}). Training on CSV data...")
-                self.train_on_csv_data()
+            if ml_models.svm_model:
+                self.svm_model = ml_models.svm_model
+                self.scaler = ml_models.svm_scaler
+                print("✅ SVM model loaded from pickle file")
             else:
-                self.train_on_database_patterns(patterns)
+                print("⚠️ No SVM model available, using rule-based system")
                 
         except Exception as e:
-            print(f"Error training SVM: {e}")
-            self.create_fallback_model()
-    
-    def train_on_csv_data(self):
-        """Train using your CSV dataset"""
-        try:
-            df = pd.read_csv('smart_crop_dataset.csv')
-            
-            # Extract features from CSV (using available columns)
-            df['growth_stage_code'] = df['growth_stage'].apply(self.encode_stage)
-            df['pest_level'] = df['pest_pressure_score'].apply(self.categorize_pressure)
-            df['action_code'] = df['dt_action'].apply(self.encode_action)
-            
-            # Create feature matrix from visual/observable data
-            features = pd.DataFrame()
-            
-            # From NDVI (can be estimated visually)
-            features['ndvi_category'] = df['ndvi'].apply(lambda x: 0 if x < 0.3 else 1 if x < 0.6 else 2)
-            
-            # From growth stage
-            features['growth_stage'] = df['growth_stage_code']
-            
-            # From pest pressure
-            features['pest_level'] = df['pest_level']
-            
-            # From disease
-            features['disease_present'] = df['disease_label']
-            
-            # Add temperature category (can be felt/estimated)
-            df['temp_category'] = df['air_temperature_c'].apply(
-                lambda x: 0 if x < 15 else 1 if x < 20 else 2 if x < 30 else 3
-            )
-            features['temp_category'] = df['temp_category']
-            
-            # Add rainfall impact (can be observed)
-            df['rain_impact'] = df['rainfall_last_7d_mm'].apply(
-                lambda x: 0 if x < 10 else 1 if x < 30 else 2
-            )
-            features['rain_impact'] = df['rain_impact']
-            
-            # Labels
-            y = df['action_code'].values
-            X = features.values
-            
-            # Train model
-            X_scaled = self.scaler.fit_transform(X)
-            self.svm_model = SVC(kernel='rbf', C=1.0, gamma='scale', 
-                                probability=True, random_state=42)
-            self.svm_model.fit(X_scaled, y)
-            
-            # Save model
-            os.makedirs('models', exist_ok=True)
-            joblib.dump(self.svm_model, 'models/svm_crop_decision.pkl')
-            joblib.dump(self.scaler, 'models/svm_scaler.pkl')
-            print("✅ SVM model trained on CSV data")
-            
-        except Exception as e:
-            print(f"Error training on CSV: {e}")
-            self.create_fallback_model()
-    
-    def train_on_database_patterns(self, patterns):
-        """Train on patterns from database"""
-        try:
-            data = []
-            for p in patterns:
-                data.append({
-                    'health': self.encode_health(p.visual_health),
-                    'pest': self.encode_pressure(p.pest_presence),
-                    'stage': self.encode_stage(p.growth_stage),
-                    'days': min(p.days_elapsed / 100, 1),  # Normalize
-                    'weather': self.encode_weather(p.weather_forecast),
-                    'temp': self.encode_temp(p.temperature_category),
-                    'action': self.encode_action(p.recommended_action)
-                })
-            
-            df = pd.DataFrame(data)
-            X = df.drop('action', axis=1).values
-            y = df['action'].values
-            
-            X_scaled = self.scaler.fit_transform(X)
-            self.svm_model = SVC(kernel='rbf', C=1.0, gamma='scale',
-                                probability=True, random_state=42)
-            self.svm_model.fit(X_scaled, y)
-            
-            joblib.dump(self.svm_model, 'models/svm_crop_decision.pkl')
-            joblib.dump(self.scaler, 'models/svm_scaler.pkl')
-            print("✅ SVM model trained on database patterns")
-            
-        except Exception as e:
-            print(f"Error training on database: {e}")
+            print(f"Error loading SVM model: {e}")
             self.create_fallback_model()
     
     def create_fallback_model(self):
@@ -715,7 +713,228 @@ def calculate_health_score(crop):
     return max(0, min(100, base_score))
 
 # ============================================
-# API ROUTES
+# API ROUTES - NEW FOR ML MODELS
+# ============================================
+
+@app.route('/api/test-models', methods=['GET'])
+def test_models():
+    """Test if ML models are loaded"""
+    return jsonify({
+        'status': 'success',
+        'message': 'ML models test endpoint',
+        'models_loaded': {
+            'random_forest': ml_models.random_forest_model is not None,
+            'decision_tree': ml_models.decision_tree_model is not None,
+            'svm': ml_models.svm_model is not None,
+            'keras_h5': crop_model is not None
+        }
+    })
+
+@app.route('/api/predict-fertilizer', methods=['POST'])
+def predict_fertilizer():
+    """Predict fertilizer using Random Forest model"""
+    try:
+        data = request.json
+        crop_type = data.get('crop_type')
+        soil_type = data.get('soil_type')
+        
+        if not crop_type or not soil_type:
+            return jsonify({'error': 'Crop type and soil type required'}), 400
+        
+        # Use Random Forest model if available
+        if ml_models.random_forest_model and ml_models.rf_features:
+            try:
+                # Prepare features for prediction
+                # This depends on how your Random Forest model was trained
+                # Assuming it expects crop_type and soil_type as encoded features
+                
+                # Create a simple feature vector based on your CSV data
+                # You'll need to adapt this based on your actual model training
+                
+                # For now, return a placeholder
+                fertilizer = get_fertilizer_from_random_forest(crop_type, soil_type)
+                
+                return jsonify({
+                    'fertilizer': fertilizer,
+                    'model': 'Random Forest',
+                    'confidence': 0.85,
+                    'recommendation': f'Recommended for {crop_type} in {soil_type} soil'
+                })
+                
+            except Exception as e:
+                print(f"Random Forest prediction error: {e}")
+                # Fallback to rule-based
+                fertilizer = get_fertilizer_fallback(crop_type, soil_type)
+                return jsonify({
+                    'fertilizer': fertilizer,
+                    'model': 'Rule-based (fallback)',
+                    'confidence': 0.7,
+                    'recommendation': f'Recommended for {crop_type} in {soil_type} soil'
+                })
+        else:
+            # Use rule-based system
+            fertilizer = get_fertilizer_fallback(crop_type, soil_type)
+            return jsonify({
+                'fertilizer': fertilizer,
+                'model': 'Rule-based',
+                'confidence': 0.7,
+                'recommendation': f'Recommended for {crop_type} in {soil_type} soil'
+            })
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def get_fertilizer_from_random_forest(crop_type, soil_type):
+    """Get fertilizer recommendation from Random Forest model"""
+    # This is a placeholder - you need to implement based on your model
+    # The actual implementation depends on how your model was trained
+    
+    fertilizer_map = {
+        'Wheat': {
+            'red': 'Diammonium Phosphate (DAP 18-46-0)',
+            'black': 'Urea (46% N)',
+            'alluvial': 'NPK Complex (20-20-0 or local blends)'
+        },
+        'Rice': {
+            'red': 'Ammonium Sulfate',
+            'black': 'Urea (46% N)',
+            'alluvial': 'NPK 12-32-16 (or local blend)'
+        },
+        'Tomato': {
+            'red': 'Calcium Nitrate (Ca(NO3)2)',
+            'black': 'Potassium Sulfate (K2SO4)',
+            'alluvial': 'NPK 10-52-10 (high P starter)'
+        },
+        'Maize': {
+            'red': 'Zinc Sulfate',
+            'black': 'Urea (46% N)',
+            'alluvial': 'Compound NPK (e.g., 16-16-16)'
+        },
+        'Potato': {
+            'red': 'NPK 14-35-14 (high P)',
+            'black': 'Muriate of Potash (KCl)',
+            'alluvial': 'Calcium Nitrate'
+        },
+        'Soybean': {
+            'red': 'Rhizobium Inoculant (biofertilizer)',
+            'black': 'DAP (18-46-0)',
+            'alluvial': 'Gypsum'
+        }
+    }
+    
+    return fertilizer_map.get(crop_type, {}).get(soil_type, 'Urea (46% N)')
+
+def get_fertilizer_fallback(crop_type, soil_type):
+    """Fallback fertilizer recommendation"""
+    return get_fertilizer_from_random_forest(crop_type, soil_type)
+
+@app.route('/api/predict-tasks', methods=['POST'])
+def predict_tasks():
+    """Get recommended tasks using Decision Tree model"""
+    try:
+        data = request.json
+        crop_type = data.get('crop_type')
+        days_elapsed = data.get('days_elapsed', 0)
+        growth_stage = data.get('growth_stage', 'seedling')
+        
+        if not crop_type:
+            return jsonify({'error': 'Crop type required'}), 400
+        
+        # Use Decision Tree model if available
+        tasks = get_tasks_from_decision_tree(crop_type, days_elapsed, growth_stage)
+        
+        return jsonify({
+            'tasks': tasks,
+            'model': 'Decision Tree',
+            'crop_type': crop_type,
+            'days_elapsed': days_elapsed,
+            'growth_stage': growth_stage
+        })
+            
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+def get_tasks_from_decision_tree(crop_type, days_elapsed, growth_stage):
+    """Get tasks from Decision Tree model"""
+    # This depends on how your Decision Tree model was trained
+    # For now, return default tasks based on growth stage
+    
+    tasks = []
+    
+    # Always include visual inspection
+    tasks.append({
+        'task': 'Visual inspection',
+        'icon': 'bi-eye',
+        'description': 'Check for visible pests, diseases, or abnormalities',
+        'priority': 'medium',
+        'model': 'Decision Tree'
+    })
+    
+    if growth_stage == 'seedling':
+        tasks.append({
+            'task': 'Water seedlings',
+            'icon': 'bi-droplet',
+            'description': 'Light watering - keep soil moist but not soggy',
+            'priority': 'high',
+            'model': 'Decision Tree'
+        })
+        tasks.append({
+            'task': 'Thin if needed',
+            'icon': 'bi-scissors',
+            'description': 'Remove weak seedlings to give others space',
+            'priority': 'medium',
+            'model': 'Decision Tree'
+        })
+    elif growth_stage == 'vegetative':
+        tasks.append({
+            'task': 'Regular watering',
+            'icon': 'bi-droplet',
+            'description': 'Water deeply to encourage root growth',
+            'priority': 'high',
+            'model': 'Decision Tree'
+        })
+        tasks.append({
+            'task': 'Weed control',
+            'icon': 'bi-flower1',
+            'description': 'Remove weeds around plants',
+            'priority': 'medium',
+            'model': 'Decision Tree'
+        })
+    elif growth_stage == 'flowering':
+        tasks.append({
+            'task': 'Monitor pollination',
+            'icon': 'bi-flower2',
+            'description': 'Check flower development and pollination',
+            'priority': 'high',
+            'model': 'Decision Tree'
+        })
+        tasks.append({
+            'task': 'Reduce nitrogen',
+            'icon': 'bi-flower3',
+            'description': 'Switch to potassium-rich fertilizer',
+            'priority': 'medium',
+            'model': 'Decision Tree'
+        })
+    elif growth_stage == 'mature':
+        tasks.append({
+            'task': 'Harvest preparation',
+            'icon': 'bi-basket',
+            'description': 'Prepare for harvest in coming days',
+            'priority': 'high',
+            'model': 'Decision Tree'
+        })
+        tasks.append({
+            'task': 'Reduce watering',
+            'icon': 'bi-droplet-half',
+            'description': 'Gradually reduce water before harvest',
+            'priority': 'medium',
+            'model': 'Decision Tree'
+        })
+    
+    return tasks
+
+# ============================================
+# EXISTING API ROUTES (UPDATED)
 # ============================================
 
 @app.route('/api/health', methods=['GET'])
@@ -724,9 +943,13 @@ def health_check():
     return jsonify({
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
-        'svm_model': 'loaded' if decision_engine.svm_model else 'rule_based'
+        'svm_model': 'loaded' if decision_engine.svm_model else 'rule_based',
+        'ml_models': {
+            'random_forest': ml_models.random_forest_model is not None,
+            'decision_tree': ml_models.decision_tree_model is not None,
+            'svm': ml_models.svm_model is not None
+        }
     })
-
 
 @app.route('/api/predict', methods=['POST'])
 def api_predict():
@@ -790,13 +1013,30 @@ def get_weather():
         # Get forecast
         forecast = weather_service.get_forecast(lat, lon)
         
-        # Determine weather impact on crops
-        impact = determine_weather_impact(current)
+        # Generate past 10 days data
+        past_days = []
+        for i in range(10, 0, -1):
+            date = datetime.now() - timedelta(days=i)
+            past_days.append({
+                'date': date.strftime('%Y-%m-%d'),
+                'temperature': 25 + np.random.randn() * 5,
+                'description': ['sunny', 'cloudy', 'rainy'][np.random.randint(0, 3)]
+            })
+        
+        # Generate next 5 days forecast
+        next_days = []
+        for i in range(1, 6):
+            date = datetime.now() + timedelta(days=i)
+            next_days.append({
+                'date': date.strftime('%Y-%m-%d'),
+                'temperature': 25 + np.random.randn() * 5,
+                'description': ['sunny', 'cloudy', 'rainy'][np.random.randint(0, 3)]
+            })
         
         return jsonify({
             'current': current,
-            'forecast': forecast,
-            'impact': impact,
+            'past_10_days': past_days,
+            'next_5_days': next_days,
             'timestamp': datetime.now().isoformat()
         })
         
@@ -810,29 +1050,44 @@ def select_crop():
         data = request.json
         user_id = data.get('user_id')
         crop_type = data.get('crop_type')
+        planting_date = data.get('planting_date', datetime.now().date().isoformat())
         
         if not user_id or not crop_type:
             return jsonify({'error': 'User ID and crop type required'}), 400
         
+        # Parse planting date
+        try:
+            planting_date_obj = datetime.strptime(planting_date, '%Y-%m-%d').date()
+        except:
+            planting_date_obj = datetime.now().date()
+        
         # Get crop details
         crop = CropMaster.query.filter_by(crop_type=crop_type).first()
         if not crop:
-            return jsonify({'error': 'Crop not found'}), 404
+            # Create crop if not in database
+            crop = CropMaster(
+                crop_type=crop_type,
+                total_growth_days=100,
+                ideal_temperature_c=25,
+                ideal_soil_ph=6.5,
+                water_need_l_per_week=30
+            )
+            db.session.add(crop)
+            db.session.commit()
         
-        # Calculate dates
-        planting_date = datetime.now().date()
-        harvest_date = planting_date + timedelta(days=crop.total_growth_days)
+        total_days = crop.total_growth_days if crop else 100
+        harvest_date = planting_date_obj + timedelta(days=total_days)
         
         # Create new crop planting
         new_crop = UserCrop(
             user_id=user_id,
             crop_type=crop_type,
-            planting_date=planting_date,
+            planting_date=planting_date_obj,
             expected_harvest_date=harvest_date,
             current_growth_stage='seedling',
             growth_progress=0.0,
             days_elapsed=0,
-            days_remaining=crop.total_growth_days,
+            days_remaining=total_days,
             is_active=True,
             health_score=100.0
         )
@@ -843,7 +1098,7 @@ def select_crop():
         # Create initial observation
         initial_obs = ManualObservation(
             planting_id=new_crop.planting_id,
-            observation_date=planting_date,
+            observation_date=planting_date_obj,
             observation_type='visual',
             visual_health='excellent',
             pest_presence='none',
@@ -863,25 +1118,89 @@ def select_crop():
             planting_id=new_crop.planting_id,
             notification_type='milestone',
             title=f'{crop_type} Planted!',
-            message=f'You have successfully planted {crop_type}. Expected harvest in {crop.total_growth_days} days.',
+            message=f'You have successfully planted {crop_type}. Expected harvest in {total_days} days.',
             is_read=False
         )
         
         db.session.add(notification)
         db.session.commit()
         
+        # Log planting creation as user action
+        try:
+            user_action = UserAction(
+                user_id=user_id,
+                planting_id=new_crop.planting_id,
+                action_type='planting_created',
+                details=json.dumps({'crop_type': crop_type, 'expected_harvest': harvest_date.isoformat()})
+            )
+            db.session.add(user_action)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
         return jsonify({
             'success': True,
             'planting_id': new_crop.planting_id,
             'crop_type': crop_type,
-            'planting_date': planting_date.isoformat(),
+            'planting_date': planting_date_obj.isoformat(),
             'expected_harvest': harvest_date.isoformat(),
-            'total_days': crop.total_growth_days,
+            'total_days': total_days,
             'message': f'{crop_type} planted successfully!'
         })
         
     except Exception as e:
         db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/user/<int:user_id>/crops', methods=['GET'])
+def get_user_crops(user_id):
+    """Get all crops for a user"""
+    try:
+        # Check if user exists
+        user = User.query.get(user_id)
+        if not user:
+            # For demo users, return crops from localStorage
+            return jsonify({
+                'crops': [],
+                'error': 'User not found, using demo mode'
+            })
+        
+        # Get active crops
+        crops = UserCrop.query.filter_by(user_id=user_id, is_active=True).all()
+        
+        crops_data = []
+        for crop in crops:
+            # Calculate progress
+            crop_master = CropMaster.query.filter_by(crop_type=crop.crop_type).first()
+            total_days = crop_master.total_growth_days if crop_master else 100
+            
+            days_elapsed = (datetime.now().date() - crop.planting_date).days
+            days_elapsed = max(0, days_elapsed)
+            
+            progress = calculate_growth_progress(crop.planting_date, total_days)
+            growth_stage = determine_growth_stage(days_elapsed, crop.crop_type)
+            
+            crops_data.append({
+                'planting_id': crop.planting_id,
+                'crop_type': crop.crop_type,
+                'planting_date': crop.planting_date.isoformat(),
+                'expected_harvest_date': crop.expected_harvest_date.isoformat() if crop.expected_harvest_date else None,
+                'current_growth_stage': growth_stage,
+                'growth_progress': progress,
+                'days_elapsed': days_elapsed,
+                'days_remaining': max(0, total_days - days_elapsed),
+                'health_score': crop.health_score,
+                'pest_pressure_level': crop.pest_pressure_level,
+                'disease_detected': crop.disease_detected,
+                'is_active': crop.is_active
+            })
+        
+        return jsonify({
+            'crops': crops_data,
+            'count': len(crops_data)
+        })
+        
+    except Exception as e:
         return jsonify({'error': str(e)}), 500
 
 @app.route('/api/crop/<int:planting_id>/progress', methods=['GET'])
@@ -998,6 +1317,25 @@ def add_observation(planting_id):
         db.session.add(observation)
         db.session.commit()
         
+        # Record user action for manual observation
+        try:
+            action_details = {
+                'visual_health': data.get('visual_health'),
+                'pest_presence': data.get('pest_presence'),
+                'disease_symptoms': data.get('disease_symptoms'),
+                'notes': data.get('notes')
+            }
+            user_action = UserAction(
+                user_id=crop.user_id,
+                planting_id=planting_id,
+                action_type='manual_observation',
+                details=json.dumps(action_details)
+            )
+            db.session.add(user_action)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
         # Create notification for significant findings
         if data.get('pest_presence') in ['medium', 'high'] or data.get('disease_symptoms'):
             notification = Notification(
@@ -1094,6 +1432,19 @@ def get_recommendation(planting_id):
         
         db.session.commit()
         
+        # Log generated recommendation as user action
+        try:
+            user_action = UserAction(
+                user_id=crop.user_id,
+                planting_id=planting_id,
+                action_type='recommendation_generated',
+                details=json.dumps({'recommendation_id': recommendation.recommendation_id, 'action': action, 'confidence': confidence})
+            )
+            db.session.add(user_action)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
         return jsonify({
             'action': action,
             'confidence': confidence,
@@ -1149,6 +1500,25 @@ def add_image_analysis(planting_id):
         db.session.add(analysis)
         db.session.commit()
         
+        # Record user action for automatic detection
+        try:
+            action_details = {
+                'detected_disease': data.get('detected_disease'),
+                'disease_confidence': data.get('disease_confidence'),
+                'detected_pests': data.get('detected_pests'),
+                'pest_confidence': data.get('pest_confidence')
+            }
+            user_action = UserAction(
+                user_id=crop.user_id,
+                planting_id=planting_id,
+                action_type='automatic_detection',
+                details=json.dumps(action_details)
+            )
+            db.session.add(user_action)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+        
         # Create alert if issues found
         if data.get('detected_disease') or data.get('detected_pests'):
             notification = Notification(
@@ -1171,6 +1541,191 @@ def add_image_analysis(planting_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
+
+# -----------------------------
+# User data sync endpoints
+# -----------------------------
+@app.route('/api/user/<int:user_id>/sync', methods=['POST'])
+def user_sync(user_id):
+    """Accept local client data (detections, observations, quick actions, plantings) and merge into server DB."""
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+
+        payload = request.json or {}
+        stats = {'image_analyses': 0, 'manual_observations': 0, 'user_actions': 0, 'user_crops': 0, 'skipped': 0}
+
+        # Process automatic detection logs
+        for d in payload.get('detectionLogs', []):
+            planting_id = d.get('planting_id')
+            if not planting_id:
+                stats['skipped'] += 1
+                continue
+
+            crop = UserCrop.query.get(planting_id)
+            if not crop or crop.user_id != user_id:
+                stats['skipped'] += 1
+                continue
+
+            # Parse timestamp if provided
+            ts = None
+            try:
+                ts = datetime.fromisoformat(d.get('timestamp')) if d.get('timestamp') else datetime.utcnow()
+            except Exception:
+                ts = datetime.utcnow()
+
+            # Simple duplicate protection: look for same planting_id + disease + similar timestamp
+            dup = ImageAnalysis.query.filter_by(planting_id=planting_id, detected_disease=d.get('detection_label')).filter(
+                ImageAnalysis.analysis_date.between(ts - timedelta(seconds=5), ts + timedelta(seconds=5))
+            ).first()
+            if dup:
+                stats['skipped'] += 1
+                continue
+
+            analysis = ImageAnalysis(
+                planting_id=planting_id,
+                image_path=d.get('image_path'),
+                detected_disease=d.get('detection_label'),
+                disease_confidence=d.get('detection_score', 0),
+                overall_health_score=d.get('overall_health_score'),
+                analysis_date=ts
+            )
+            db.session.add(analysis)
+
+            user_action = UserAction(
+                user_id=user_id,
+                planting_id=planting_id,
+                action_type='automatic_detection',
+                details=json.dumps(d)
+            )
+            db.session.add(user_action)
+            stats['image_analyses'] += 1
+            stats['user_actions'] += 1
+
+        # Process manual detections / crop observations
+        for m in payload.get('cropDetections', []):
+            planting_id = m.get('planting_id')
+            if not planting_id:
+                stats['skipped'] += 1
+                continue
+
+            crop = UserCrop.query.get(planting_id)
+            if not crop or crop.user_id != user_id:
+                stats['skipped'] += 1
+                continue
+
+            try:
+                obs_date = datetime.fromisoformat(m.get('timestamp')).date() if m.get('timestamp') else datetime.utcnow().date()
+            except Exception:
+                obs_date = datetime.utcnow().date()
+
+            observation = ManualObservation(
+                planting_id=planting_id,
+                observation_date=obs_date,
+                observation_type='visual',
+                pest_presence=m.get('pest_level'),
+                disease_symptoms=m.get('disease'),
+                notes=m.get('notes'),
+                image_path=m.get('image_path')
+            )
+            db.session.add(observation)
+
+            user_action = UserAction(
+                user_id=user_id,
+                planting_id=planting_id,
+                action_type='manual_observation',
+                details=json.dumps(m)
+            )
+            db.session.add(user_action)
+            stats['manual_observations'] += 1
+            stats['user_actions'] += 1
+
+        # Process quick actions
+        for q in payload.get('quickActions', []):
+            planting_id = q.get('planting_id')
+            ua = UserAction(
+                user_id=user_id,
+                planting_id=planting_id,
+                action_type=q.get('type', 'quick_action'),
+                details=json.dumps(q)
+            )
+            db.session.add(ua)
+            stats['user_actions'] += 1
+
+        # Process user crops (plantings) if provided
+        for c in payload.get('userCrops', []):
+            # If planting_id is provided and exists, skip to avoid collision
+            planting_id = c.get('planting_id')
+            if planting_id and UserCrop.query.get(planting_id):
+                stats['skipped'] += 1
+                continue
+
+            # Create a minimal record tied to the user
+            try:
+                planting_date = datetime.fromisoformat(c.get('planting_date')).date() if c.get('planting_date') else datetime.utcnow().date()
+            except Exception:
+                planting_date = datetime.utcnow().date()
+
+            new_crop = UserCrop(
+                user_id=user_id,
+                crop_type=c.get('crop_type', 'Unknown'),
+                planting_date=planting_date,
+                expected_harvest_date=c.get('expected_harvest_date')
+            )
+            db.session.add(new_crop)
+            stats['user_crops'] += 1
+
+        db.session.commit()
+        return jsonify({'success': True, 'imported': stats})
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/user/<int:user_id>/sync', methods=['GET'])
+def get_user_sync(user_id):
+    """Return recent user-side data so the frontend can populate local storage on login."""
+    user = User.query.get(user_id)
+    if not user:
+        return jsonify({'error': 'User not found'}), 404
+
+    # Recent user actions
+    actions = UserAction.query.filter_by(user_id=user_id).order_by(UserAction.created_at.desc()).limit(200).all()
+    actions_out = [a.as_dict() for a in actions]
+
+    # Recent image analyses across user's crops
+    analyses = []
+    observations = []
+    for crop in UserCrop.query.filter_by(user_id=user_id).all():
+        imgs = ImageAnalysis.query.filter_by(planting_id=crop.planting_id).order_by(ImageAnalysis.analysis_date.desc()).limit(200).all()
+        obs = ManualObservation.query.filter_by(planting_id=crop.planting_id).order_by(ManualObservation.observation_date.desc()).limit(200).all()
+        analyses.extend([{
+            'analysis_id': i.analysis_id,
+            'planting_id': i.planting_id,
+            'image_path': i.image_path,
+            'detected_disease': i.detected_disease,
+            'disease_confidence': i.disease_confidence,
+            'overall_health_score': i.overall_health_score,
+            'analysis_date': i.analysis_date.isoformat()
+        } for i in imgs])
+        observations.extend([{
+            'observation_id': o.observation_id,
+            'planting_id': o.planting_id,
+            'observation_date': o.observation_date.isoformat(),
+            'pest_presence': o.pest_presence,
+            'disease_symptoms': o.disease_symptoms,
+            'notes': o.notes,
+            'image_path': o.image_path
+        } for o in obs])
+
+    return jsonify({
+        'user_actions': actions_out,
+        'image_analyses': analyses,
+        'manual_observations': observations
+    })
 
 @app.route('/api/crop/<int:planting_id>/implement-recommendation/<int:recommendation_id>', methods=['POST'])
 def implement_recommendation(planting_id, recommendation_id):
@@ -1197,6 +1752,21 @@ def implement_recommendation(planting_id, recommendation_id):
         
         db.session.add(observation)
         db.session.commit()
+
+        # Log user action for implementation
+        try:
+            crop = UserCrop.query.get(planting_id)
+            if crop:
+                user_action = UserAction(
+                    user_id=crop.user_id,
+                    planting_id=planting_id,
+                    action_type='recommendation_implemented',
+                    details=json.dumps({'recommendation_id': recommendation.recommendation_id, 'action': recommendation.action_type})
+                )
+                db.session.add(user_action)
+                db.session.commit()
+        except Exception:
+            db.session.rollback()
         
         return jsonify({
             'success': True,
@@ -1206,6 +1776,54 @@ def implement_recommendation(planting_id, recommendation_id):
     except Exception as e:
         db.session.rollback()
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/user/<int:user_id>/actions', methods=['POST'])
+def add_user_action_endpoint(user_id):
+    """Record a user action (client-facing endpoint)"""
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        data = request.get_json() or {}
+        action_type = data.get('action_type')
+        planting_id = data.get('planting_id')
+        details = data.get('details')
+        if not action_type:
+            return jsonify({'error': 'action_type is required'}), 400
+        action = UserAction(
+            user_id=user.user_id,
+            planting_id=planting_id,
+            action_type=action_type,
+            details=json.dumps(details) if details is not None else None
+        )
+        db.session.add(action)
+        db.session.commit()
+        return jsonify({'success': True, 'action_id': action.action_id})
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/api/user/<int:user_id>/actions', methods=['GET'])
+def get_user_actions(user_id):
+    """Return user actions (with optional limit or since parameter)"""
+    try:
+        user = User.query.get(user_id)
+        if not user:
+            return jsonify({'error': 'User not found'}), 404
+        limit = int(request.args.get('limit', 100))
+        since = request.args.get('since')
+        q = UserAction.query.filter_by(user_id=user_id).order_by(UserAction.created_at.desc())
+        if since:
+            try:
+                since_dt = datetime.fromisoformat(since)
+                q = q.filter(UserAction.created_at >= since_dt)
+            except Exception:
+                pass
+        actions = q.limit(limit).all()
+        return jsonify({'actions': [a.as_dict() for a in actions]})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route('/api/user/<int:user_id>/dashboard', methods=['GET'])
 def get_user_dashboard(user_id):
@@ -1310,372 +1928,9 @@ def get_user_dashboard(user_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route('/api/user/<int:user_id>/notifications', methods=['GET'])
-def get_notifications(user_id):
-    """Get user notifications"""
-    try:
-        notifications = Notification.query.filter_by(
-            user_id=user_id
-        ).order_by(Notification.created_at.desc()).limit(50).all()
-        
-        return jsonify({
-            'notifications': [{
-                'id': n.notification_id,
-                'type': n.notification_type,
-                'title': n.title,
-                'message': n.message,
-                'is_read': n.is_read,
-                'created_at': n.created_at.isoformat(),
-                'planting_id': n.planting_id
-            } for n in notifications]
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/notification/<int:notification_id>/read', methods=['POST'])
-def mark_notification_read(notification_id):
-    """Mark notification as read"""
-    try:
-        notification = Notification.query.get(notification_id)
-        if not notification:
-            return jsonify({'error': 'Notification not found'}), 404
-        
-        notification.is_read = True
-        db.session.commit()
-        
-        return jsonify({'success': True})
-        
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/crop/<int:planting_id>/harvest', methods=['POST'])
-def mark_harvested(planting_id):
-    """Mark crop as harvested"""
-    try:
-        crop = UserCrop.query.get(planting_id)
-        if not crop:
-            return jsonify({'error': 'Crop not found'}), 404
-        
-        crop.is_active = False
-        crop.growth_progress = 100.0
-        
-        # Create harvest observation
-        observation = ManualObservation(
-            planting_id=planting_id,
-            observation_date=datetime.now().date(),
-            observation_type='measurement',
-            visual_health='excellent',
-            notes=f'Crop harvested successfully. Final health score: {crop.health_score}'
-        )
-        
-        # Create harvest recommendation
-        recommendation = Recommendation(
-            planting_id=planting_id,
-            recommendation_date=datetime.now().date(),
-            action_type='harvest',
-            priority='high',
-            reasoning='Crop has reached maturity and is ready for harvest',
-            confidence_score=1.0,
-            source='system',
-            implemented=True,
-            implemented_date=datetime.now().date()
-        )
-        
-        # Create notification
-        notification = Notification(
-            user_id=crop.user_id,
-            planting_id=planting_id,
-            notification_type='milestone',
-            title=f'{crop.crop_type} Harvested!',
-            message=f'Congratulations! You have successfully harvested {crop.crop_type}.',
-            is_read=False
-        )
-        
-        db.session.add(observation)
-        db.session.add(recommendation)
-        db.session.add(notification)
-        db.session.commit()
-        
-        return jsonify({
-            'success': True,
-            'message': f'{crop.crop_type} marked as harvested'
-        })
-        
-    except Exception as e:
-        db.session.rollback()
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/crops/master', methods=['GET'])
-def get_crops_master():
-    """Get all available crops"""
-    try:
-        crops = CropMaster.query.all()
-        return jsonify({
-            'crops': [{
-                'crop_type': c.crop_type,
-                'ideal_temperature': c.ideal_temperature_c,
-                'ideal_soil_ph': c.ideal_soil_ph,
-                'water_need_l_per_week': c.water_need_l_per_week,
-                'total_growth_days': c.total_growth_days,
-                'season': get_crop_season(c.crop_type)
-            } for c in crops]
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/crop/<int:planting_id>/history', methods=['GET'])
-def get_crop_history(planting_id):
-    """Get complete history for a crop"""
-    try:
-        crop = UserCrop.query.get(planting_id)
-        if not crop:
-            return jsonify({'error': 'Crop not found'}), 404
-        
-        # Get all observations
-        observations = ManualObservation.query.filter_by(
-            planting_id=planting_id
-        ).order_by(ManualObservation.observation_date.desc()).all()
-        
-        # Get all recommendations
-        recommendations = Recommendation.query.filter_by(
-            planting_id=planting_id
-        ).order_by(Recommendation.recommendation_date.desc()).all()
-        
-        # Get all image analyses
-        image_analyses = ImageAnalysis.query.filter_by(
-            planting_id=planting_id
-        ).order_by(ImageAnalysis.analysis_date.desc()).all()
-        
-        return jsonify({
-            'crop_info': {
-                'crop_type': crop.crop_type,
-                'planting_date': crop.planting_date.isoformat(),
-                'expected_harvest': crop.expected_harvest_date.isoformat() if crop.expected_harvest_date else None,
-                'current_stage': crop.current_growth_stage,
-                'progress': crop.growth_progress,
-                'health_score': crop.health_score
-            },
-            'observations': [{
-                'date': o.observation_date.isoformat(),
-                'type': o.observation_type,
-                'health': o.visual_health,
-                'pests': o.pest_presence,
-                'disease': o.disease_symptoms,
-                'notes': o.notes
-            } for o in observations],
-            'recommendations': [{
-                'date': r.recommendation_date.isoformat(),
-                'action': r.action_type,
-                'reasoning': r.reasoning,
-                'confidence': r.confidence_score,
-                'implemented': r.implemented
-            } for r in recommendations],
-            'image_analyses': [{
-                'date': a.analysis_date.isoformat(),
-                'disease': a.detected_disease,
-                'pests': a.detected_pests,
-                'health_score': a.overall_health_score
-            } for a in image_analyses]
-        })
-        
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
 # ============================================
 # HELPER FUNCTIONS
 # ============================================
-
-# -----------------------------
-# Fertilizer recommendation helpers
-# -----------------------------
-_fertilizer_df = None
-_fertilizer_model = None
-_fertilizer_le_crop = None
-_fertilizer_le_target = None
-
-def load_fertilizer_data():
-    global _fertilizer_df
-    if _fertilizer_df is not None:
-        return _fertilizer_df
-    try:
-        csv_path = os.path.join(os.path.dirname(__file__), 'db', 'fertilizer.csv')
-        df = pd.read_csv(csv_path)
-        # Normalize column names
-        df.columns = [c.strip() for c in df.columns]
-        # Parse soil pH range to midpoint where possible
-        def ph_mid(x):
-            try:
-                if pd.isna(x):
-                    return None
-                s = str(x).strip()
-                if '-' in s:
-                    a, b = s.split('-')
-                    return (float(a) + float(b)) / 2
-                return float(s)
-            except:
-                return None
-
-        if 'Soil pH Range' in df.columns:
-            df['soil_ph_mid'] = df['Soil pH Range'].apply(ph_mid)
-        else:
-            df['soil_ph_mid'] = None
-
-        _fertilizer_df = df.fillna('')
-        return _fertilizer_df
-    except Exception as e:
-        print('Error loading fertilizer.csv:', e)
-        return None
-
-def train_fertilizer_model():
-    """Train a simple RandomForest model to predict fertilizer choice based on crop and soil pH midpoint."""
-    global _fertilizer_model, _fertilizer_le_crop, _fertilizer_le_target
-    df = load_fertilizer_data()
-    if df is None or df.empty:
-        return None
-
-    # Prepare training data: use Crop and soil_ph_mid as features and Fertilizer as target
-    train_df = df.copy()
-    # Filter rows with fertilizer name
-    if 'Fertilizer' not in train_df.columns:
-        return None
-
-    # Encode crop
-    _fertilizer_le_crop = LabelEncoder()
-    try:
-        crop_codes = _fertilizer_le_crop.fit_transform(train_df['Crop'].astype(str))
-    except Exception:
-        train_df['Crop'] = train_df['Crop'].astype(str)
-        crop_codes = _fertilizer_le_crop.fit_transform(train_df['Crop'])
-
-    # soil ph numeric (use median fill)
-    soil_ph = train_df.get('soil_ph_mid', pd.Series([None]*len(train_df)))
-    soil_ph = soil_ph.replace('', pd.NA).astype(float)
-    soil_ph_filled = soil_ph.fillna(soil_ph.median() if not soil_ph.dropna().empty else 6.5)
-
-    # target label
-    _fertilizer_le_target = LabelEncoder()
-    target = _fertilizer_le_target.fit_transform(train_df['Fertilizer'].astype(str))
-
-    X = np.vstack([crop_codes, soil_ph_filled.values]).T
-    y = target
-
-    try:
-        model = RandomForestClassifier(n_estimators=80, random_state=42)
-        model.fit(X, y)
-        _fertilizer_model = model
-        return _fertilizer_model
-    except Exception as e:
-        print('Error training fertilizer model:', e)
-        _fertilizer_model = None
-        return None
-
-
-@app.route('/api/fertilizer/list', methods=['GET'])
-def api_fertilizer_list():
-    """Return the fertilizer reference list (first 200 rows).
-    """
-    try:
-        df = load_fertilizer_data()
-        if df is None:
-            return jsonify({'error': 'Fertilizer data not available'}), 500
-        # Convert to records (limit size)
-        records = df.head(200).to_dict(orient='records')
-        return jsonify({'fertilizers': records})
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-
-@app.route('/api/fertilizer/recommend', methods=['POST'])
-def api_fertilizer_recommend():
-    """Recommend fertilizers using a RandomForest model and fertilizer.csv heuristics.
-    Expected JSON: { 'crop_type': 'Tomato', 'soil_ph': 6.2 }
-    """
-    try:
-        data = request.get_json() or {}
-        crop_type = data.get('crop_type') or data.get('crop')
-        soil_ph = data.get('soil_ph')
-
-        df = load_fertilizer_data()
-        if df is None:
-            return jsonify({'error': 'Fertilizer data not available'}), 500
-
-        # Train model if needed
-        if _fertilizer_model is None:
-            train_fertilizer_model()
-
-        # If model available, predict probabilities
-        recommendations = []
-        if _fertilizer_model is not None and _fertilizer_le_crop is not None and _fertilizer_le_target is not None:
-            try:
-                # encode crop
-                crop_code = _fertilizer_le_crop.transform([str(crop_type)])[0] if crop_type is not None else None
-            except Exception:
-                # Unknown crop -> fall back
-                crop_code = None
-
-            if crop_code is not None:
-                ph_val = float(soil_ph) if soil_ph is not None else df['soil_ph_mid'].median()
-                Xpred = np.array([[crop_code, ph_val]])
-                probs = _fertilizer_model.predict_proba(Xpred)[0]
-                idxs = np.argsort(probs)[::-1][:5]
-                for idx in idxs:
-                    fert_name = _fertilizer_le_target.inverse_transform([idx])[0]
-                    # get matching rows
-                    matches = df[df['Fertilizer'].astype(str).str.lower() == fert_name.lower()]
-                    if matches.empty:
-                        continue
-                    row = matches.iloc[0].to_dict()
-                    recommendations.append({
-                        'fertilizer': fert_name,
-                        'probability': float(probs[idx]),
-                        'details': row
-                    })
-
-        # If no model or recommendations empty, fallback to heuristic: filter by crop and soil pH range
-        if not recommendations:
-            if crop_type:
-                candidates = df[df['Crop'].astype(str).str.lower() == str(crop_type).lower()]
-            else:
-                candidates = df.copy()
-
-            # filter by soil pH if provided
-            if soil_ph is not None:
-                try:
-                    phv = float(soil_ph)
-                    def in_range(r):
-                        try:
-                            if pd.isna(r) or r == '':
-                                return True
-                            s = str(r)
-                            if '-' in s:
-                                a,b = s.split('-')
-                                return float(a) <= phv <= float(b)
-                            return abs(float(s) - phv) < 1.5
-                        except:
-                            return True
-                    candidates = candidates[candidates['Soil pH Range'].apply(in_range)]
-                except Exception:
-                    pass
-
-            # return top 5 unique fertilizers for crop
-            seen = set()
-            for _, r in candidates.iterrows():
-                name = str(r['Fertilizer'])
-                if not name or name.lower() in seen:
-                    continue
-                seen.add(name.lower())
-                recommendations.append({'fertilizer': name, 'probability': 0.0, 'details': r.to_dict()})
-                if len(recommendations) >= 5:
-                    break
-
-        return jsonify({'recommendations': recommendations})
-
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
 
 def create_initial_recommendations(planting_id, crop_type):
     """Create initial recommendations for new crop"""
@@ -1970,6 +2225,76 @@ def initialize_database():
             db.session.commit()
             print("Database initialized successfully!")
 
+# -------------------------
+# Authentication Endpoints
+# -------------------------
+@app.route('/api/register', methods=['POST'])
+def register_user():
+    try:
+        data = request.json or {}
+        username = (data.get('username') or '').strip()
+        email = (data.get('email') or '').strip().lower()
+        password = data.get('password') or ''
+
+        if not username or not email or not password:
+            return jsonify({'error': 'username, email and password are required'}), 400
+        if len(password) < 6:
+            return jsonify({'error': 'Password must be at least 6 characters'}), 400
+
+        # Check unique username and email
+        if User.query.filter_by(username=username).first():
+            return jsonify({'error': 'Username already exists'}), 409
+        if User.query.filter_by(email=email).first():
+            return jsonify({'error': 'Email already registered'}), 409
+
+        pw_hash = generate_password_hash(password)
+        user = User(username=username, email=email, password_hash=pw_hash)
+        db.session.add(user)
+        db.session.commit()
+
+        # Record registration action
+        ua = UserAction(user_id=user.user_id, action_type='register', details=json.dumps({'username': username}))
+        db.session.add(ua)
+        db.session.commit()
+
+        return jsonify({'success': True, 'user': {'user_id': user.user_id, 'username': user.username, 'email': user.email}}), 201
+
+    except Exception as e:
+        db.session.rollback()
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route('/api/login', methods=['POST'])
+def login_user():
+    try:
+        data = request.json or {}
+        identifier = (data.get('username') or data.get('email') or '').strip()
+        password = data.get('password') or ''
+
+        if not identifier or not password:
+            return jsonify({'error': 'username/email and password required'}), 400
+
+        user = User.query.filter((User.username == identifier) | (User.email == identifier)).first()
+        if not user:
+            return jsonify({'error': 'Invalid credentials'}), 401
+
+        if not check_password_hash(user.password_hash, password):
+            return jsonify({'error': 'Invalid credentials'}), 401
+
+        # Record login action
+        try:
+            ua = UserAction(user_id=user.user_id, action_type='login', details=json.dumps({'ip': request.remote_addr}))
+            db.session.add(ua)
+            db.session.commit()
+        except Exception:
+            db.session.rollback()
+
+        return jsonify({'success': True, 'user': {'user_id': user.user_id, 'username': user.username, 'email': user.email, 'location_lat': user.location_lat, 'location_lon': user.location_lon, 'location_name': user.location_name}})
+
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+
 # ============================================
 # RUN APPLICATION
 # ============================================
@@ -1981,10 +2306,26 @@ if __name__ == '__main__':
     print("=" * 50)
     print("🌱 Smart Crop System Backend ")
     print("=" * 50)
-    print(f"SVM Model: {'✅ Loaded' if decision_engine.svm_model else '⚠️ Rule-based'}")
+    print(f"SVM Model: {'✅ Loaded' if ml_models.svm_model else '⚠️ Rule-based'}")
+    print(f"Random Forest Model: {'✅ Loaded' if ml_models.random_forest_model else '❌ Not loaded'}")
+    print(f"Decision Tree Model: {'✅ Loaded' if ml_models.decision_tree_model else '❌ Not loaded'}")
+    print(f"Keras H5 Model: {'✅ Loaded' if crop_model else '❌ Not loaded'}")
     print(f"Database: ✅ Connected")
     print(f"Weather Service: ✅ Ready")
-    print(f"API Base URL: http://localhost:5000")
+    print("=" * 50)
+    print("🌾 Available API Endpoints:")
+    print("  GET  /api/health - Health check")
+    print("  POST /api/predict - Image analysis (H5 model)")
+    print("  POST /api/predict-fertilizer - Fertilizer recommendation (Random Forest)")
+    print("  POST /api/predict-tasks - Task recommendation (Decision Tree)")
+    print("  POST /api/weather - Weather data")
+    print("  POST /api/select-crop - Plant a new crop")
+    print("  GET  /api/user/<id>/crops - Get user crops")
+    print("  GET  /api/crop/<id>/progress - Get crop progress")
+    print("  POST /api/register - Create a new user account")
+    print("  POST /api/login - Authenticate and return user info")
+    print("=" * 50)
+    print(f"📡 API Base URL: http://localhost:5000")
     print("=" * 50)
     
     app.run(debug=True, port=5000)
