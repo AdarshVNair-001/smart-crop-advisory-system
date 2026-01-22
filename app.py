@@ -155,6 +155,8 @@ class User(db.Model):
     location_lon = db.Column(db.Float)
     location_name = db.Column(db.String(100))
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    reset_token = db.Column(db.String(255))
+    reset_token_expiry = db.Column(db.DateTime)
     
     crops = db.relationship('UserCrop', backref='user', lazy=True)
     actions = db.relationship('UserAction', backref='user', lazy=True)
@@ -2293,6 +2295,158 @@ def login_user():
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+@app.route('/api/forgot-password', methods=['POST'])
+def forgot_password():
+    try:
+        data = request.json or {}
+        email = (data.get('email') or '').strip()
+
+        if not email:
+            return jsonify({'success': False, 'message': 'Email is required'}), 400
+
+        user = User.query.filter(User.email == email).first()
+        if not user:
+            # Don't reveal if email exists or not for security
+            return jsonify({'success': True, 'message': 'If an account with this email exists, a password reset link has been sent'}), 200
+
+        # Generate a simple reset token (in production, use more secure method like JWT)
+        import uuid
+        import secrets
+        reset_token = secrets.token_urlsafe(32)
+        reset_token_expiry = datetime.utcnow() + timedelta(hours=1)
+        
+        # Store reset token in database (you may need to add these columns to User model)
+        user.reset_token = reset_token
+        user.reset_token_expiry = reset_token_expiry
+        db.session.commit()
+
+        # Construct reset URL (adjust based on your frontend domain)
+        reset_url = f"http://localhost:5000/reset-password?token={reset_token}&email={email}"
+        
+        # Send email with reset link (simplified - in production use proper email service)
+        email_subject = "Password Reset Request"
+        email_body = f"""
+        Hello {user.username},
+
+        You requested a password reset. Click the link below to reset your password:
+        {reset_url}
+
+        This link will expire in 1 hour.
+
+        If you didn't request this, please ignore this email.
+
+        Best regards,
+        Smart Crop Advisory System
+        """
+
+        # For now, just log it (in production, use SendGrid, AWS SES, etc.)
+        print(f"\n📧 Password Reset Email would be sent to {email}")
+        print(f"Reset URL: {reset_url}\n")
+
+        return jsonify({'success': True, 'message': 'Password reset link has been sent to your email'}), 200
+
+    except Exception as e:
+        print(f"Error in forgot_password: {str(e)}")
+        return jsonify({'success': False, 'message': 'An error occurred'}), 500
+
+@app.route('/reset-password', methods=['GET', 'POST'])
+def reset_password():
+    try:
+        if request.method == 'GET':
+            # Show reset password form
+            token = request.args.get('token')
+            email = request.args.get('email')
+            
+            if not token or not email:
+                return "Invalid reset link", 400
+            
+            user = User.query.filter(User.email == email).first()
+            if not user or user.reset_token != token or (user.reset_token_expiry and user.reset_token_expiry < datetime.utcnow()):
+                return "Invalid or expired reset link", 400
+            
+            # Return a simple HTML form for password reset
+            return f"""
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Reset Password</title>
+                <style>
+                    body {{ font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #f0f0f0; }}
+                    .container {{ background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }}
+                    h1 {{ color: #333; }}
+                    input {{ width: 100%; padding: 10px; margin: 10px 0; border: 1px solid #ddd; border-radius: 4px; box-sizing: border-box; }}
+                    button {{ width: 100%; padding: 10px; background: #10b981; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; }}
+                    button:hover {{ background: #059669; }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>Reset Your Password</h1>
+                    <form method="POST">
+                        <input type="hidden" name="token" value="{token}">
+                        <input type="hidden" name="email" value="{email}">
+                        <input type="password" name="new_password" placeholder="New Password" required>
+                        <input type="password" name="confirm_password" placeholder="Confirm Password" required>
+                        <button type="submit">Reset Password</button>
+                    </form>
+                </div>
+            </body>
+            </html>
+            """
+        
+        elif request.method == 'POST':
+            # Process password reset
+            token = request.form.get('token')
+            email = request.form.get('email')
+            new_password = request.form.get('new_password')
+            confirm_password = request.form.get('confirm_password')
+            
+            if not all([token, email, new_password, confirm_password]):
+                return "Missing required fields", 400
+            
+            if new_password != confirm_password:
+                return "Passwords do not match", 400
+            
+            if len(new_password) < 6:
+                return "Password must be at least 6 characters", 400
+            
+            user = User.query.filter(User.email == email).first()
+            if not user or user.reset_token != token or (user.reset_token_expiry and user.reset_token_expiry < datetime.utcnow()):
+                return "Invalid or expired reset link", 400
+            
+            # Update password
+            user.password_hash = generate_password_hash(new_password)
+            user.reset_token = None
+            user.reset_token_expiry = None
+            db.session.commit()
+            
+            return """
+            <!DOCTYPE html>
+            <html>
+            <head>
+                <title>Password Reset Successful</title>
+                <style>
+                    body {{ font-family: Arial, sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #f0f0f0; }}
+                    .container {{ background: white; padding: 30px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); text-align: center; }}
+                    h1 {{ color: #10b981; }}
+                    p {{ color: #666; margin: 20px 0; }}
+                    a {{ display: inline-block; padding: 10px 20px; background: #10b981; color: white; text-decoration: none; border-radius: 4px; }}
+                </style>
+            </head>
+            <body>
+                <div class="container">
+                    <h1>✓ Password Reset Successful!</h1>
+                    <p>Your password has been successfully reset.</p>
+                    <a href="/index.html">Return to Login</a>
+                </div>
+            </body>
+            </html>
+            """, 200
+    
+    except Exception as e:
+        print(f"Error in reset_password: {str(e)}")
+        return "An error occurred", 500
 
 
 # ============================================
