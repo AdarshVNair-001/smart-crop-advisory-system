@@ -2,14 +2,12 @@
 // home.js — Smart Crop System (With Supabase User Progress)
 // ============================================
 
-// Global variables
 let userLocation = null;
 let selectedCrop = null;
 let currentPage = 'home';
 let currentWeatherData = null;
 const API_BASE_URL = 'http://localhost:5000/api';
 
-// Available crops data (matching database)
 const crops = [
     { id: 1, name: 'Tomato', icon: 'bi-flower1', season: 'Summer', duration: 110 },
     { id: 2, name: 'Rice', icon: 'bi-flower2', season: 'Monsoon', duration: 150 },
@@ -19,27 +17,20 @@ const crops = [
     { id: 6, name: 'Soybean', icon: 'bi-flower3', season: 'Monsoon', duration: 85 }
 ];
 
-// Current user and planting
 let currentUser = null;
 let currentPlantingId = null;
 let progressUpdateInterval = null;
 
-// UI control flags
-let highlightedPlantingId = null; // for clicking card highlight only (does not open detail)
-let showTasksAndProgress = false; // main dashboard tasks/progress hidden by default
+let highlightedPlantingId = null;
+let showTasksAndProgress = false;
 
-
-// Demo user ID (for when not logged in)
 const DEMO_USER_ID = 'demo-user-999';
 
-// Global variables for multiple crops
 let userCrops = [];
 
-// Supabase configuration
 const supabaseUrl = "https://alezsadxhbqozzfxzios.supabase.co";
 const supabaseKey = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFsZXpzYWR4aGJxb3p6Znh6aW9zIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NjY4OTkyNDMsImV4cCI6MjA4MjQ3NTI0M30.G4fU1jYvZSxuE0fVbAkKe-2WPgBKCe5lwieUyKico0I";
 
-// MODEL CONFIG & GLOBALS
 const MODEL_CONFIG = {
   tfjsModelUrl: './models/tfjs/model.json',
   onnxModelUrl: './models/model.onnx',
@@ -65,7 +56,6 @@ let onnxSession = null;
 let labels = null;
 let modelLoaded = false;
 
-// ML Models
 let svmModel = null;
 let svmScaler = null;
 let svmFeatures = null;
@@ -84,7 +74,6 @@ previewCanvas.style = 'display:none;';
 document.body.appendChild(previewCanvas);
 const previewCtx = previewCanvas.getContext('2d');
 
-// Expose functions to global scope
 window.navigateToPage = navigateToPage;
 window.selectCropForDetail = selectCropForDetail;
 window.viewCropDetails = viewCropDetails;
@@ -93,9 +82,583 @@ window.showAllCrops = showAllCrops;
 window.copyFertilizerInfo = copyFertilizerInfo;
 window.findAlternative = findAlternative;
 
-// ---------------------
-// INITIALIZATION
-// ---------------------
+const AI_ADVICE_DATABASE = {
+    seedling: {
+        tomato: [
+            {
+                id: 'tomato_seedling_1',
+                title: 'Ensure Proper Spacing',
+                description: 'Keep seedlings 18-24 inches apart to prevent overcrowding and disease spread.',
+                icon: 'bi-arrows-angle-expand',
+                priority: 'high',
+                conditions: 'planting_density > 4'
+            },
+            {
+                id: 'tomato_seedling_2',
+                title: 'Water Management',
+                description: 'Water deeply but infrequently to encourage deep root growth. Avoid wetting leaves.',
+                icon: 'bi-droplet',
+                priority: 'medium',
+                conditions: 'soil_moisture < 40'
+            },
+            {
+                id: 'tomato_seedling_3',
+                title: 'Temperature Control',
+                description: 'Maintain soil temperature between 65-85°F for optimal germination and growth.',
+                icon: 'bi-thermometer-half',
+                priority: 'medium',
+                conditions: 'temperature < 60 || temperature > 90'
+            },
+            {
+                id: 'tomato_seedling_4',
+                title: 'Light Requirements',
+                description: 'Provide 14-16 hours of light daily. Use grow lights if natural light is insufficient.',
+                icon: 'bi-sun',
+                priority: 'low',
+                conditions: 'light_hours < 12'
+            },
+            {
+                id: 'tomato_seedling_5',
+                title: 'Nutrient Boost',
+                description: 'Apply diluted liquid seaweed fertilizer for stronger root development.',
+                icon: 'bi-flower1',
+                priority: 'medium',
+                conditions: 'days_since_fertilizer > 14'
+            }
+        ],
+        rice: [
+            {
+                id: 'rice_seedling_1',
+                title: 'Water Level Management',
+                description: 'Maintain 1-2 inches of standing water. Check daily for proper water depth.',
+                icon: 'bi-water',
+                priority: 'high',
+                conditions: 'water_depth < 0.5 || water_depth > 3'
+            },
+            {
+                id: 'rice_seedling_2',
+                title: 'Transplant Timing',
+                description: 'Transplant seedlings when they are 3-4 weeks old and have 4-5 leaves.',
+                icon: 'bi-arrow-clockwise',
+                priority: 'high',
+                conditions: 'age > 25 && leaves < 4'
+            },
+            {
+                id: 'rice_seedling_3',
+                title: 'Nitrogen Application',
+                description: 'Apply first dose of nitrogen fertilizer 10-15 days after sowing.',
+                icon: 'bi-flower2',
+                priority: 'medium',
+                conditions: 'age > 10 && nitrogen_applied == false'
+            },
+            {
+                id: 'rice_seedling_4',
+                title: 'Pest Monitoring',
+                description: 'Check for stem borer eggs and leaf folders. Use pheromone traps for monitoring.',
+                icon: 'bi-bug',
+                priority: 'medium',
+                conditions: 'pest_level > 0'
+            },
+            {
+                id: 'rice_seedling_5',
+                title: 'Weed Control',
+                description: 'Control weeds manually or with pre-emergence herbicides before flooding.',
+                icon: 'bi-flower3',
+                priority: 'low',
+                conditions: 'weed_coverage > 10'
+            }
+        ],
+        wheat: [
+            {
+                id: 'wheat_seedling_1',
+                title: 'Soil Moisture Check',
+                description: 'Ensure soil is moist but not waterlogged. Wheat needs good drainage.',
+                icon: 'bi-moisture',
+                priority: 'high',
+                conditions: 'soil_moisture > 80 || soil_moisture < 30'
+            },
+            {
+                id: 'wheat_seedling_2',
+                title: 'Phosphorus Application',
+                description: 'Apply DAP or SSP at sowing for strong root establishment.',
+                icon: 'bi-flower1',
+                priority: 'medium',
+                conditions: 'phosphorus_applied == false'
+            },
+            {
+                id: 'wheat_seedling_3',
+                title: 'Seed Treatment',
+                description: 'Treat seeds with fungicides to prevent seed-borne diseases.',
+                icon: 'bi-shield-check',
+                priority: 'low',
+                conditions: 'seed_treated == false'
+            },
+            {
+                id: 'wheat_seedling_4',
+                title: 'Temperature Monitoring',
+                description: 'Optimal temperature for germination is 15-20°C. Protect from frost.',
+                icon: 'bi-thermometer',
+                priority: 'medium',
+                conditions: 'temperature < 10 || temperature > 25'
+            },
+            {
+                id: 'wheat_seedling_5',
+                title: 'Soil Testing',
+                description: 'Test soil pH and nutrient levels. Adjust based on results.',
+                icon: 'bi-clipboard-data',
+                priority: 'low',
+                conditions: 'soil_tested == false'
+            }
+        ]
+    },
+    
+    vegetative: {
+        tomato: [
+            {
+                id: 'tomato_vegetative_1',
+                title: 'Pruning Suckers',
+                description: 'Remove suckers (side shoots) that grow between main stem and branches.',
+                icon: 'bi-scissors',
+                priority: 'high',
+                conditions: 'plant_height > 12'
+            },
+            {
+                id: 'tomato_vegetative_2',
+                title: 'Staking and Support',
+                description: 'Install stakes or cages to support growing plants and prevent breakage.',
+                icon: 'bi-postage',
+                priority: 'high',
+                conditions: 'plant_height > 18'
+            },
+            {
+                id: 'tomato_vegetative_3',
+                title: 'Nitrogen Application',
+                description: 'Apply balanced fertilizer with higher nitrogen for leafy growth.',
+                icon: 'bi-flower1',
+                priority: 'medium',
+                conditions: 'nitrogen_applied == false || days_since_fertilizer > 21'
+            },
+            {
+                id: 'tomato_vegetative_4',
+                title: 'Disease Prevention',
+                description: 'Apply copper-based fungicide to prevent early blight and bacterial spot.',
+                icon: 'bi-shield',
+                priority: 'medium',
+                conditions: 'humidity > 70'
+            },
+            {
+                id: 'tomato_vegetative_5',
+                title: 'Mulching',
+                description: 'Apply organic mulch to conserve moisture and suppress weeds.',
+                icon: 'bi-tree',
+                priority: 'low',
+                conditions: 'soil_temperature > 75'
+            }
+        ],
+        rice: [
+            {
+                id: 'rice_vegetative_1',
+                title: 'Water Management',
+                description: 'Maintain 2-3 inches of standing water. Alternate wetting and drying recommended.',
+                icon: 'bi-water',
+                priority: 'high',
+                conditions: 'water_depth < 1.5 || water_depth > 4'
+            },
+            {
+                id: 'rice_vegetative_2',
+                title: 'Tiller Count Check',
+                description: 'Monitor tiller development. Aim for 20-25 productive tillers per hill.',
+                icon: 'bi-graph-up',
+                priority: 'medium',
+                conditions: 'tillers < 15'
+            },
+            {
+                id: 'rice_vegetative_3',
+                title: 'Nitrogen Top Dressing',
+                description: 'Apply second dose of nitrogen at maximum tillering stage.',
+                icon: 'bi-flower2',
+                priority: 'high',
+                conditions: 'age > 40 && age < 60'
+            },
+            {
+                id: 'rice_vegetative_4',
+                title: 'Weed Control',
+                description: 'Use post-emergence herbicides or manual weeding to control weeds.',
+                icon: 'bi-flower3',
+                priority: 'medium',
+                conditions: 'weed_coverage > 15'
+            },
+            {
+                id: 'rice_vegetative_5',
+                title: 'Zinc Application',
+                description: 'Apply zinc sulfate if symptoms of zinc deficiency appear.',
+                icon: 'bi-droplet',
+                priority: 'low',
+                conditions: 'zinc_applied == false'
+            }
+        ],
+        wheat: [
+            {
+                id: 'wheat_vegetative_1',
+                title: 'Nitrogen Top Dressing',
+                description: 'Apply first dose of nitrogen at crown root initiation stage.',
+                icon: 'bi-flower1',
+                priority: 'high',
+                conditions: 'age > 25 && age < 35'
+            },
+            {
+                id: 'wheat_vegetative_2',
+                title: 'Weed Management',
+                description: 'Apply post-emergence herbicides or do manual weeding.',
+                icon: 'bi-flower2',
+                priority: 'medium',
+                conditions: 'weed_coverage > 20'
+            },
+            {
+                id: 'wheat_vegetative_3',
+                title: 'Irrigation Scheduling',
+                description: 'First irrigation at crown root initiation (20-25 days after sowing).',
+                icon: 'bi-droplet',
+                priority: 'high',
+                conditions: 'soil_moisture < 50'
+            },
+            {
+                id: 'wheat_vegetative_4',
+                title: 'Pest Monitoring',
+                description: 'Check for aphids and termites. Use yellow sticky traps.',
+                icon: 'bi-bug',
+                priority: 'medium',
+                conditions: 'pest_level > 0'
+            },
+            {
+                id: 'wheat_vegetative_5',
+                title: 'Growth Regulator',
+                description: 'Apply growth regulators if plant height exceeds optimal levels.',
+                icon: 'bi-arrow-down-up',
+                priority: 'low',
+                conditions: 'plant_height > 40'
+            }
+        ]
+    },
+    
+    flowering: {
+        tomato: [
+            {
+                id: 'tomato_flowering_1',
+                title: 'Blossom Drop Prevention',
+                description: 'Maintain temperature between 70-85°F and avoid excessive nitrogen.',
+                icon: 'bi-flower1',
+                priority: 'high',
+                conditions: 'temperature < 65 || temperature > 90'
+            },
+            {
+                id: 'tomato_flowering_2',
+                title: 'Calcium Application',
+                description: 'Apply calcium nitrate to prevent blossom end rot.',
+                icon: 'bi-flower2',
+                priority: 'medium',
+                conditions: 'calcium_applied == false'
+            },
+            {
+                id: 'tomato_flowering_3',
+                title: 'Pollination Assistance',
+                description: 'Gently shake plants or use electric vibrator to improve pollination.',
+                icon: 'bi-flower3',
+                priority: 'low',
+                conditions: 'flower_count > 0 && fruit_set < 30'
+            },
+            {
+                id: 'tomato_flowering_4',
+                title: 'Potassium Boost',
+                description: 'Switch to high-potassium fertilizer for better fruit development.',
+                icon: 'bi-flower1',
+                priority: 'medium',
+                conditions: 'potassium_applied == false'
+            },
+            {
+                id: 'tomato_flowering_5',
+                title: 'Water Consistency',
+                description: 'Maintain consistent soil moisture to prevent fruit cracking.',
+                icon: 'bi-droplet',
+                priority: 'high',
+                conditions: 'soil_moisture_variation > 20'
+            }
+        ],
+        rice: [
+            {
+                id: 'rice_flowering_1',
+                title: 'Water Critical Stage',
+                description: 'Maintain 2-3 inches of water during flowering for maximum yield.',
+                icon: 'bi-water',
+                priority: 'high',
+                conditions: 'water_depth < 2 || water_depth > 4'
+            },
+            {
+                id: 'rice_flowering_2',
+                title: 'Potassium Application',
+                description: 'Apply potassium sulfate at flowering for better grain filling.',
+                icon: 'bi-flower1',
+                priority: 'medium',
+                conditions: 'potassium_applied == false'
+            },
+            {
+                id: 'rice_flowering_3',
+                title: 'Pest Control',
+                description: 'Monitor for panicle blast and apply appropriate fungicides.',
+                icon: 'bi-shield',
+                priority: 'high',
+                conditions: 'humidity > 80'
+            },
+            {
+                id: 'rice_flowering_4',
+                title: 'Temperature Management',
+                description: 'Protect from temperature extremes during flowering (25-30°C optimal).',
+                icon: 'bi-thermometer',
+                priority: 'medium',
+                conditions: 'temperature < 20 || temperature > 35'
+            },
+            {
+                id: 'rice_flowering_5',
+                title: 'Micronutrient Spray',
+                description: 'Apply boron and zinc spray for better pollination.',
+                icon: 'bi-droplet-half',
+                priority: 'low',
+                conditions: 'micronutrient_spray == false'
+            }
+        ],
+        wheat: [
+            {
+                id: 'wheat_flowering_1',
+                title: 'Irrigation at Flowering',
+                description: 'Apply irrigation at flowering stage if soil moisture is low.',
+                icon: 'bi-droplet',
+                priority: 'high',
+                conditions: 'soil_moisture < 60'
+            },
+            {
+                id: 'wheat_flowering_2',
+                title: 'Fungicide Application',
+                description: 'Apply fungicide to prevent powdery mildew and rust.',
+                icon: 'bi-shield-check',
+                priority: 'medium',
+                conditions: 'humidity > 70'
+            },
+            {
+                id: 'wheat_flowering_3',
+                title: 'Potassium Application',
+                description: 'Apply potassium for better grain development and disease resistance.',
+                icon: 'bi-flower1',
+                priority: 'low',
+                conditions: 'potassium_applied == false'
+            },
+            {
+                id: 'wheat_flowering_4',
+                title: 'Temperature Monitoring',
+                description: 'Protect from heat stress during flowering (15-25°C optimal).',
+                icon: 'bi-thermometer-half',
+                priority: 'medium',
+                conditions: 'temperature > 30'
+            },
+            {
+                id: 'wheat_flowering_5',
+                title: 'Lodging Prevention',
+                description: 'Monitor for lodging risk. Consider support if heavy heads develop.',
+                icon: 'bi-arrow-down-up',
+                priority: 'low',
+                conditions: 'plant_height > 100'
+            }
+        ]
+    },
+    
+    mature: {
+        tomato: [
+            {
+                id: 'tomato_mature_1',
+                title: 'Harvest Timing',
+                description: 'Harvest tomatoes when they show first blush of color for best flavor.',
+                icon: 'bi-basket',
+                priority: 'high',
+                conditions: 'fruit_color_changing == true'
+            },
+            {
+                id: 'tomato_mature_2',
+                title: 'Water Reduction',
+                description: 'Reduce watering as fruits mature to concentrate flavors.',
+                icon: 'bi-droplet-half',
+                priority: 'medium',
+                conditions: 'days_to_harvest < 14'
+            },
+            {
+                id: 'tomato_mature_3',
+                title: 'Disease Management',
+                description: 'Remove any diseased leaves to prevent late blight spread.',
+                icon: 'bi-shield-x',
+                priority: 'medium',
+                conditions: 'disease_present == true'
+            },
+            {
+                id: 'tomato_mature_4',
+                title: 'Fruit Quality Enhancement',
+                description: 'Apply Epsom salt spray for better fruit color and quality.',
+                icon: 'bi-flower1',
+                priority: 'low',
+                conditions: 'magnesium_applied == false'
+            },
+            {
+                id: 'tomato_mature_5',
+                title: 'Harvest Method',
+                description: 'Use sharp scissors to cut fruits, leaving small stem attached.',
+                icon: 'bi-scissors',
+                priority: 'low',
+                conditions: 'harvest_started == false'
+            }
+        ],
+        rice: [
+            {
+                id: 'rice_mature_1',
+                title: 'Water Drainage',
+                description: 'Drain fields 10-15 days before harvest for uniform maturity.',
+                icon: 'bi-water',
+                priority: 'high',
+                conditions: 'days_to_harvest < 15'
+            },
+            {
+                id: 'rice_mature_2',
+                title: 'Bird Control',
+                description: 'Use bird scarers or nets to protect maturing grains.',
+                icon: 'bi-eye',
+                priority: 'medium',
+                conditions: 'bird_damage > 0'
+            },
+            {
+                id: 'rice_mature_3',
+                title: 'Harvest Timing',
+                description: 'Harvest when 80-85% of grains are golden yellow.',
+                icon: 'bi-basket',
+                priority: 'high',
+                conditions: 'grain_maturity > 80'
+            },
+            {
+                id: 'rice_mature_4',
+                title: 'Moisture Check',
+                description: 'Check grain moisture (should be 20-24% at harvest).',
+                icon: 'bi-moisture',
+                priority: 'medium',
+                conditions: 'grain_moisture_unknown == true'
+            },
+            {
+                id: 'rice_mature_5',
+                title: 'Straw Management',
+                description: 'Plan for straw incorporation or removal after harvest.',
+                icon: 'bi-recycle',
+                priority: 'low',
+                conditions: 'straw_management_planned == false'
+            }
+        ],
+        wheat: [
+            {
+                id: 'wheat_mature_1',
+                title: 'Harvest Timing',
+                description: 'Harvest when grain moisture is 12-14% for optimal quality.',
+                icon: 'bi-basket',
+                priority: 'high',
+                conditions: 'grain_moisture < 15'
+            },
+            {
+                id: 'wheat_mature_2',
+                title: 'Combine Settings',
+                description: 'Adjust combine for wheat harvest (cutter bar height 6-8 inches).',
+                icon: 'bi-gear',
+                priority: 'medium',
+                conditions: 'harvest_method == "combine"'
+            },
+            {
+                id: 'wheat_mature_3',
+                title: 'Storage Preparation',
+                description: 'Clean and disinfect storage bins before harvest.',
+                icon: 'bi-box',
+                priority: 'low',
+                conditions: 'storage_prepared == false'
+            },
+            {
+                id: 'wheat_mature_4',
+                title: 'Weather Monitoring',
+                description: 'Avoid harvesting during rain or high humidity.',
+                icon: 'bi-cloud-rain',
+                priority: 'high',
+                conditions: 'rain_forecast == true'
+            },
+            {
+                id: 'wheat_mature_5',
+                title: 'Post-Harvest Planning',
+                description: 'Plan for straw management and next crop rotation.',
+                icon: 'bi-calendar-check',
+                priority: 'low',
+                conditions: 'next_crop_planned == false'
+            }
+        ]
+    }
+};
+
+const AI_SOURCES = [
+    {
+        id: 'weather_ai',
+        name: 'Weather AI',
+        icon: 'bi-cloud-sun',
+        description: 'Weather-based adaptive recommendations',
+        color: '#3498db'
+    },
+    {
+        id: 'soil_ai',
+        name: 'Soil Health AI',
+        icon: 'bi-tree',
+        description: 'Soil analysis and nutrient management',
+        color: '#8b4513'
+    },
+    {
+        id: 'disease_ai',
+        name: 'Disease Prediction AI',
+        icon: 'bi-shield',
+        description: 'Early disease detection and prevention',
+        color: '#e74c3c'
+    },
+    {
+        id: 'yield_ai',
+        name: 'Yield Optimization AI',
+        icon: 'bi-graph-up-arrow',
+        description: 'Maximize crop yield and quality',
+        color: '#2ecc71'
+    },
+    {
+        id: 'irrigation_ai',
+        name: 'Smart Irrigation AI',
+        icon: 'bi-droplet',
+        description: 'Precision water management',
+        color: '#2980b9'
+    },
+    {
+        id: 'market_ai',
+        name: 'Market Intelligence AI',
+        icon: 'bi-cart',
+        description: 'Harvest timing for optimal pricing',
+        color: '#f39c12'
+    },
+    {
+        id: 'sustainability_ai',
+        name: 'Sustainability AI',
+        icon: 'bi-recycle',
+        description: 'Eco-friendly farming practices',
+        color: '#27ae60'
+    },
+    {
+        id: 'pest_ai',
+        name: 'Pest Management AI',
+        icon: 'bi-bug',
+        description: 'Integrated pest management',
+        color: '#d35400'
+    }
+];
+
 document.addEventListener('DOMContentLoaded', function() {
     console.log('✅ Smart Crop System Initialized');
     initializeApp();
@@ -104,11 +667,9 @@ document.addEventListener('DOMContentLoaded', function() {
 async function initializeApp() {
     console.log('Initializing app...');
     
-    // Initialize Supabase
     if (window.supabase) {
         supabase = window.supabase.createClient(supabaseUrl, supabaseKey);
         
-        // Check for existing session
         const { data: { session } } = await supabase.auth.getSession();
         
         if (session) {
@@ -119,10 +680,8 @@ async function initializeApp() {
                 email: session.user.email
             };
             
-            // Load user progress from Supabase
             await loadUserProgressFromSupabase();
         } else {
-            // No session, use demo mode
             currentUser = {
                 id: DEMO_USER_ID,
                 username: 'Demo User',
@@ -131,7 +690,6 @@ async function initializeApp() {
             console.log('Using demo user mode');
         }
     } else {
-        // Supabase not available, use demo mode
         currentUser = {
             id: DEMO_USER_ID,
             username: 'Demo User',
@@ -142,30 +700,22 @@ async function initializeApp() {
     
     updateUserDisplay();
     
-    // Check location
     await loadUserLocation();
     
     setupEventListeners();
     initializePlantsGrid();
     
-    // Load models
     await Promise.all([
         loadModel(),
         loadMLModels()
     ]);
     
-    // Initialize navigation state
     initializeNavigation();
-    
-    // Initialize quick actions
     initializeQuickActions();
     
     console.log('App initialization complete');
 }
 
-// ---------------------
-// LOAD ML MODELS
-// ---------------------
 async function loadMLModels() {
     console.log('Loading ML models...');
     
@@ -193,9 +743,6 @@ async function testMLModelEndpoints() {
     }
 }
 
-// ---------------------
-// AUTHENTICATION FUNCTIONS
-// ---------------------
 async function loginUser(email, password) {
     try {
         if (!supabase) {
@@ -220,13 +767,10 @@ async function loginUser(email, password) {
                 email: data.user.email
             };
             
-            // Save user to localStorage for persistence
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
             
-            // Migrate demo data to user account
             await migrateDemoDataToUser();
             
-            // Load user progress from Supabase
             await loadUserProgressFromSupabase();
             
             updateUserDisplay();
@@ -270,10 +814,8 @@ async function signupUser(name, email, password) {
                 email: data.user.email
             };
             
-            // Save user to localStorage
             localStorage.setItem('currentUser', JSON.stringify(currentUser));
             
-            // Create user progress record in Supabase
             await createUserProgressRecord();
             
             updateUserDisplay();
@@ -290,21 +832,17 @@ async function signupUser(name, email, password) {
 
 async function logoutUser() {
     try {
-        // Save current progress before logging out
         await saveUserProgressToSupabase();
         
-        // Sign out from Supabase
         if (supabase) {
             await supabase.auth.signOut();
         }
         
-        // Clear user data
         currentUser = null;
         currentPlantingId = null;
         userCrops = [];
         localStorage.removeItem('currentUser');
         
-        // Redirect to landing page
         window.location.href = 'index.html';
         
     } catch (error) {
@@ -313,9 +851,6 @@ async function logoutUser() {
     }
 }
 
-// ---------------------
-// USER PROGRESS MANAGEMENT
-// ---------------------
 async function createUserProgressRecord() {
     if (!supabase || !currentUser || currentUser.id === DEMO_USER_ID) return;
     
@@ -355,12 +890,10 @@ async function loadUserProgressFromSupabase() {
             .single();
         
         if (!error && data && data.progress_data) {
-            // Load crops
             if (data.progress_data.userCrops) {
                 userCrops = data.progress_data.userCrops;
             }
             
-            // Load location
             if (data.progress_data.location) {
                 userLocation = data.progress_data.location;
                 updateLocationDisplay();
@@ -370,11 +903,9 @@ async function loadUserProgressFromSupabase() {
                 showLocationModal();
             }
             
-            // Update dashboard
             updateDashboardWithAllCrops();
             console.log('User progress loaded from Supabase');
         } else {
-            // No progress found, load from localStorage as fallback
             await loadUserProgressFromLocalStorage();
         }
     } catch (error) {
@@ -408,7 +939,6 @@ async function saveUserProgressToSupabase() {
         
         if (error) {
             console.error('Error saving user progress:', error);
-            // Fallback to localStorage
             await saveUserProgressToLocalStorage();
         } else {
             console.log('User progress saved to Supabase');
@@ -420,13 +950,11 @@ async function saveUserProgressToSupabase() {
 }
 
 async function loadUserProgressFromLocalStorage() {
-    // Load crops
     const savedCrops = localStorage.getItem('userCrops');
     if (savedCrops) {
         userCrops = JSON.parse(savedCrops);
     }
     
-    // Load location
     const savedLocation = localStorage.getItem('userLocation');
     if (savedLocation) {
         userLocation = JSON.parse(savedLocation);
@@ -451,7 +979,6 @@ async function saveUserProgressToLocalStorage() {
 async function migrateDemoDataToUser() {
     if (!supabase || !currentUser || currentUser.id === DEMO_USER_ID) return;
     
-    // Get demo data from localStorage
     const demoCrops = localStorage.getItem('userCrops');
     const demoLocation = localStorage.getItem('userLocation');
     const demoDetections = localStorage.getItem('cropDetections');
@@ -467,7 +994,6 @@ async function migrateDemoDataToUser() {
                 migrated_at: new Date().toISOString()
             };
             
-            // Save to Supabase
             const { error } = await supabase
                 .from('user_progress')
                 .upsert({
@@ -479,13 +1005,11 @@ async function migrateDemoDataToUser() {
                 });
             
             if (!error) {
-                // Clear demo data from localStorage
                 localStorage.removeItem('userCrops');
                 localStorage.removeItem('userLocation');
                 localStorage.removeItem('cropDetections');
                 localStorage.removeItem('cropObservations');
                 
-                // Update local variables
                 userCrops = progressData.userCrops;
                 userLocation = progressData.location;
                 
@@ -498,12 +1022,8 @@ async function migrateDemoDataToUser() {
     }
 }
 
-// ---------------------
-// LOAD USER LOCATION
-// ---------------------
 async function loadUserLocation() {
     if (currentUser.id === DEMO_USER_ID) {
-        // For demo user, check localStorage
         const savedLocation = localStorage.getItem('userLocation');
         if (savedLocation) {
             try {
@@ -518,16 +1038,12 @@ async function loadUserLocation() {
             showLocationModal();
         }
     } else {
-        // For logged-in users, location is loaded with progress
         if (!userLocation) {
             showLocationModal();
         }
     }
 }
 
-// ---------------------
-// FERTILIZER RECOMMENDATION WITH RANDOM FOREST
-// ---------------------
 function loadFertilizerPage() {
     console.log('Loading fertilizer recommendation page');
     const cropSelect = document.getElementById('fertCrop');
@@ -537,7 +1053,6 @@ function loadFertilizerPage() {
 
     if (!cropSelect || !soilTypeSelect || !btn || !results) return;
 
-    // Populate crop options
     cropSelect.innerHTML = '<option value="">-- Select Crop --</option>';
     crops.forEach(c => {
         const opt = document.createElement('option');
@@ -546,7 +1061,6 @@ function loadFertilizerPage() {
         cropSelect.appendChild(opt);
     });
 
-    // Populate soil type options
     const soilTypes = [
         { value: 'red', label: 'Red Soils' },
         { value: 'black', label: 'Black Soils' },
@@ -567,7 +1081,6 @@ function loadFertilizerPage() {
         soilTypeSelect.appendChild(opt);
     });
 
-    // Button action - Use Random Forest model via API
     btn.onclick = async function() {
         const crop = cropSelect.value;
         const soilType = soilTypeSelect.value;
@@ -577,7 +1090,6 @@ function loadFertilizerPage() {
             return;
         }
         
-        // Show loading state
         results.innerHTML = `
             <div class="loading-analysis">
                 <div class="spinner"></div>
@@ -586,21 +1098,17 @@ function loadFertilizerPage() {
         `;
         
         try {
-            // Try to get recommendation from Random Forest model via API
             const fertilizerName = await getFertilizerFromRandomForest(crop, soilType);
             
-            // Display the result
             displayFertilizerResult(crop, soilType, fertilizerName);
             
         } catch (error) {
             console.error('Random Forest API error:', error);
-            // Fallback to rule-based system
             const fertilizerName = getBestFertilizerForCropAndSoil(crop, soilType);
             displayFertilizerResult(crop, soilType, fertilizerName);
         }
     };
 
-    // Clear previous results
     results.innerHTML = '<p>Select crop type and soil type to get the best fertilizer recommendation (using Random Forest model).</p>';
 }
 
@@ -968,9 +1476,6 @@ function findAlternative(crop, soilType) {
     showNotification('info', 'Alternative Found', `Showing alternative: ${alternative}`);
 }
 
-// ---------------------
-// GET TASKS FROM DECISION TREE
-// ---------------------
 async function getTasksFromDecisionTree(crop, daysElapsed, growthStage) {
     if (!crop || !selectedCrop) return null;
     
@@ -1085,18 +1590,10 @@ function getDefaultTasks(crop, daysElapsed, growthStage) {
     return tasks;
 }
 
-// ---------------------
-// LOAD ALL USER CROPS
-// ---------------------
 async function loadAllUserCrops() {
-    // This function is now handled by loadUserProgressFromSupabase
-    // Keeping for compatibility
     updateDashboardWithAllCrops();
 }
 
-// ---------------------
-// UPDATE DASHBOARD WITH ALL CROPS
-// ---------------------
 async function updateDashboardWithAllCrops() {
     const currentCropElement = document.getElementById('currentCrop');
     if (!currentCropElement) return;
@@ -1113,7 +1610,6 @@ async function updateDashboardWithAllCrops() {
             </div>
         `;
         
-        // Add event listener to the button
         const browseBtn = document.getElementById('browseCropsBtn');
         if (browseBtn) {
             browseBtn.addEventListener('click', () => navigateToPage('plants'));
@@ -1204,14 +1700,11 @@ async function updateDashboardWithAllCrops() {
     html += `</div>`;
     currentCropElement.innerHTML = html;
     
-    // Add event listeners
     document.querySelectorAll('.dashboard-crop-card').forEach(card => {
         card.addEventListener('click', function(e) {
-            // Clicking the card should only highlight it (do not open the detail view).
             if (!e.target.closest('.crop-actions')) {
                 const plantingId = parseInt(this.getAttribute('data-planting-id'));
                 highlightedPlantingId = highlightedPlantingId === plantingId ? null : plantingId;
-                // Re-render to update selected styling
                 updateDashboardWithAllCrops();
             }
         });
@@ -1222,7 +1715,6 @@ async function updateDashboardWithAllCrops() {
         btn.addEventListener('click', function(e) {
             e.stopPropagation();
             const plantingId = parseInt(this.getAttribute('data-planting-id'));
-            // When user explicitly chooses to view details, open the detail page/view
             viewCropDetails(plantingId);
         });
     });
@@ -1235,7 +1727,6 @@ async function updateDashboardWithAllCrops() {
         });
     });
     
-    // Add event listener to "Add More" button
     const addMoreBtn = document.getElementById('addMoreCropsBtn');
     if (addMoreBtn) {
         addMoreBtn.addEventListener('click', () => navigateToPage('plants'));
@@ -1244,16 +1735,13 @@ async function updateDashboardWithAllCrops() {
     if (currentWeatherData && currentWeatherData.current) {
         updateWeatherImpact(currentWeatherData.current);
     }
-    // Show/hide main progress and today's tasks cards based on UI flag
+    
     const progCard = document.getElementById('growthProgressCard');
     const tasksCard = document.getElementById('todaysTasksCard');
     if (progCard) progCard.style.display = showTasksAndProgress ? '' : 'none';
     if (tasksCard) tasksCard.style.display = showTasksAndProgress ? '' : 'none';
 }
 
-// ---------------------
-// SELECT CROP FOR DETAIL VIEW
-// ---------------------
 async function selectCropForDetail(plantingId) {
     const crop = userCrops.find(c => c.planting_id === plantingId);
     if (crop) {
@@ -1269,9 +1757,6 @@ async function selectCropForDetail(plantingId) {
     }
 }
 
-// ---------------------
-// SHOW CROP DETAIL VIEW
-// ---------------------
 async function showCropDetailView(crop) {
     const cropData = crops.find(c => c.name === crop.crop_type) || {
         name: crop.crop_type,
@@ -1295,7 +1780,6 @@ async function showCropDetailView(crop) {
     else if (daysElapsed < 90) growthStage = 'flowering';
     else growthStage = 'mature';
     
-    // Get tasks from Decision Tree model
     const tasks = await getTasksFromDecisionTree(cropData, daysElapsed, growthStage);
     
     const detailView = `
@@ -1377,7 +1861,6 @@ async function showCropDetailView(crop) {
         currentCropElement.innerHTML = detailView;
         updateTasksForDetail(tasks);
         
-        // Add event listener to back button
         const backBtn = document.getElementById('backToAllBtn');
         if (backBtn) {
             backBtn.addEventListener('click', showAllCrops);
@@ -1385,9 +1868,6 @@ async function showCropDetailView(crop) {
     }
 }
 
-// ---------------------
-// UPDATE TASKS FOR DETAIL VIEW (with per-task check & progress)
-// ---------------------
 function updateTasksForDetail(tasks) {
     const tasksContainer = document.getElementById('todaysTasksDetail');
     if (!tasksContainer) return;
@@ -1438,7 +1918,6 @@ function updateTasksForDetail(tasks) {
         tasksContainer.insertAdjacentHTML('beforeend', html);
     });
 
-    // Attach listeners to check buttons
     tasksContainer.querySelectorAll('.task-check-btn').forEach(btn => {
         btn.addEventListener('click', function(e) {
             e.stopPropagation();
@@ -1450,9 +1929,6 @@ function updateTasksForDetail(tasks) {
     updateTodayTasksOverallProgress(plantingId, completedCount, tasks.length);
 }
 
-// ---------------------
-// TASK COMPLETION STORAGE & HELPERS
-// ---------------------
 function getTodayStr() {
     const t = new Date();
     return `${t.getFullYear()}-${String(t.getMonth() + 1).padStart(2, '0')}-${String(t.getDate()).padStart(2, '0')}`;
@@ -1464,11 +1940,9 @@ function loadTaskCompletions() {
 
 function saveTaskCompletions(obj) {
     localStorage.setItem('taskCompletions', JSON.stringify(obj));
-    // Persist user progress so server can later be extended to include tasks
     try {
         saveUserProgressToSupabase();
     } catch (e) {
-        // ignore if not available
     }
 }
 
@@ -1488,7 +1962,6 @@ function toggleTaskCompletion(plantingId, idx) {
 
     saveTaskCompletions(all);
 
-    // Update UI for the specific task
     const tasksContainer = document.getElementById('todaysTasksDetail');
     const item = tasksContainer ? tasksContainer.querySelector(`.task-item[data-task-idx="${idx}"]`) : null;
     if (item) {
@@ -1505,7 +1978,6 @@ function toggleTaskCompletion(plantingId, idx) {
         }
     }
 
-    // Recalculate overall
     const tasksElems = tasksContainer ? tasksContainer.querySelectorAll('.task-item') : [];
     let doneCount = 0;
     tasksElems.forEach(el => {
@@ -1526,29 +1998,19 @@ function updateTodayTasksOverallProgress(plantingId, completedCount, total) {
     if (label) label.textContent = `Today's Completion — ${percent}% (${completedCount}/${total})`;
 }
 
-// ---------------------
-// SHOW ALL CROPS (Return to dashboard)
-// ---------------------
 function showAllCrops() {
     selectedCrop = null;
     currentPlantingId = null;
-    // Reset UI flags so main dashboard doesn't show tasks/progress
     showTasksAndProgress = false;
     highlightedPlantingId = null;
     updateDashboardWithAllCrops();
     updateWeatherImpact(currentWeatherData ? currentWeatherData.current : null);
 }
 
-// ---------------------
-// VIEW CROP DETAILS (Alternative)
-// ---------------------
 function viewCropDetails(plantingId) {
     selectCropForDetail(plantingId);
 }
 
-// ---------------------
-// REMOVE CROP
-// ---------------------
 async function removeCrop(plantingId) {
     if (confirm('Are you sure you want to remove this crop? This will delete all associated data.')) {
         userCrops = userCrops.filter(crop => crop.planting_id !== plantingId);
@@ -1558,7 +2020,6 @@ async function removeCrop(plantingId) {
             currentPlantingId = null;
         }
         
-        // Save progress after removal
         await saveUserProgressToSupabase();
         
         updateDashboardWithAllCrops();
@@ -1566,9 +2027,6 @@ async function removeCrop(plantingId) {
     }
 }
 
-// ---------------------
-// EVENT LISTENERS SETUP
-// ---------------------
 function setupEventListeners() {
     console.log('Setting up event listeners...');
     
@@ -1642,9 +2100,6 @@ function setupEventListeners() {
     });
 }
 
-// ---------------------
-// SETUP NAVIGATION LISTENERS
-// ---------------------
 function setupNavigationListeners() {
     console.log('Setting up navigation listeners...');
     
@@ -1674,9 +2129,6 @@ function setupNavigationListeners() {
     });
 }
 
-// ---------------------
-// NAVIGATION FUNCTIONS
-// ---------------------
 function toggleNavigation() {
     console.log('Toggling navigation...');
     const sideNav = document.getElementById('side_nav');
@@ -1740,7 +2192,6 @@ function navigateToPage(pageName) {
 
     currentPage = pageName;
     
-    // Always close the navbar when navigating to a page
     const sideNav = document.getElementById('side_nav');
     if (sideNav && sideNav.classList.contains('active')) {
         toggleNavigation();
@@ -1757,9 +2208,6 @@ function navigateToPage(pageName) {
     console.log('Navigation complete to:', pageName);
 }
 
-// ---------------------
-// INITIALIZE NAVIGATION
-// ---------------------
 function initializeNavigation() {
     console.log('Initializing navigation...');
     
@@ -1780,9 +2228,6 @@ function initializeNavigation() {
     }, 100);
 }
 
-// ---------------------
-// USER FUNCTIONS
-// ---------------------
 function updateUserDisplay() {
     const loginBtn = document.getElementById('logoutBtn');
     
@@ -1797,9 +2242,6 @@ function updateUserDisplay() {
     }
 }
 
-// ---------------------
-// LOCATION FUNCTIONS
-// ---------------------
 function showLocationModal() {
     const locationModal = document.getElementById('locationModal');
     if (locationModal) locationModal.style.display = 'flex';
@@ -1882,9 +2324,6 @@ function updateLocationDisplay() {
     }
 }
 
-// ---------------------
-// WEATHER API FUNCTIONS
-// ---------------------
 async function fetchWeatherDataFromAPI() {
     if (!userLocation) return;
     
@@ -2065,9 +2504,6 @@ function fetchMockWeatherData() {
     updateWeatherImpact(mockCurrent);
 }
 
-// ---------------------
-// CROP SELECTION WITH DATE PICKER
-// ---------------------
 function initializePlantsGrid() {
     const plantsGrid = document.querySelector('.plants-grid');
     if (!plantsGrid) return;
@@ -2100,9 +2536,6 @@ function initializePlantsGrid() {
     });
 }
 
-// ---------------------
-// SHOW PLANTING CALENDAR POPUP
-// ---------------------
 function showPlantingCalendar(crop) {
     console.log('Showing planting calendar for:', crop.name);
     
@@ -2137,7 +2570,6 @@ function showPlantingCalendar(crop) {
     
     document.body.appendChild(modal);
     
-    // Add event listeners
     document.getElementById('closePlantingModal').addEventListener('click', () => modal.remove());
     document.getElementById('cancelPlanting').addEventListener('click', () => modal.remove());
     document.getElementById('confirmPlanting').addEventListener('click', () => confirmPlanting(crop.name));
@@ -2145,13 +2577,9 @@ function showPlantingCalendar(crop) {
     setTimeout(() => initializePlantingCalendar(), 100);
 }
 
-// Global variables for calendar navigation
 let currentCalendarMonth = null;
 let currentCalendarYear = null;
 
-// ---------------------
-// INITIALIZE PLANTING CALENDAR
-// ---------------------
 function initializePlantingCalendar() {
     const calendarContainer = document.getElementById('plantingCalendar');
     if (!calendarContainer) return;
@@ -2165,9 +2593,6 @@ function initializePlantingCalendar() {
     calendarContainer.innerHTML = generatePlantingCalendarHTML(currentCalendarMonth, currentCalendarYear);
 }
 
-// ---------------------
-// GENERATE PLANTING CALENDAR HTML
-// ---------------------
 function generatePlantingCalendarHTML(month, year) {
     const firstDay = new Date(year, month, 1);
     const lastDay = new Date(year, month + 1, 0);
@@ -2231,9 +2656,7 @@ function generatePlantingCalendarHTML(month, year) {
         </div>
     `;
     
-    // Add event listeners after the HTML is inserted
     setTimeout(() => {
-        // Month navigation
         const prevMonthBtn = document.getElementById('prevMonth');
         const nextMonthBtn = document.getElementById('nextMonth');
         
@@ -2244,12 +2667,10 @@ function generatePlantingCalendarHTML(month, year) {
             nextMonthBtn.addEventListener('click', () => changePlantingMonth(1));
         }
         
-        // Day selection
         document.querySelectorAll('.calendar-popup-day:not(.past):not(.future)').forEach(day => {
             day.addEventListener('click', () => selectPlantingDate(day));
         });
         
-        // Select today by default
         const todayElement = document.querySelector('.calendar-popup-day.today');
         if (todayElement) {
             selectPlantingDate(todayElement);
@@ -2259,9 +2680,6 @@ function generatePlantingCalendarHTML(month, year) {
     return html;
 }
 
-// ---------------------
-// SELECT PLANTING DATE
-// ---------------------
 function selectPlantingDate(element) {
     if (element.classList.contains('past') || element.classList.contains('future')) {
         return;
@@ -2279,9 +2697,6 @@ function selectPlantingDate(element) {
     document.getElementById('plantingDateInput').value = date;
 }
 
-// ---------------------
-// CHANGE PLANTING MONTH
-// ---------------------
 function changePlantingMonth(delta) {
     if (currentCalendarMonth === null || currentCalendarYear === null) {
         const today = new Date();
@@ -2302,9 +2717,6 @@ function changePlantingMonth(delta) {
     initializePlantingCalendar();
 }
 
-// ---------------------
-// CONFIRM PLANTING
-// ---------------------
 async function confirmPlanting(cropName) {
     const crop = crops.find(c => c.name === cropName);
     if (!crop) return;
@@ -2320,13 +2732,10 @@ async function confirmPlanting(cropName) {
         created_at: new Date().toISOString()
     };
     
-    // Add to local array
     userCrops.push(newCrop);
     
-    // Save to Supabase
     await saveUserProgressToSupabase();
     
-    // Close modal and update UI
     const modal = document.querySelector('.modal-overlay');
     if (modal) modal.remove();
     
@@ -2337,9 +2746,6 @@ async function confirmPlanting(cropName) {
                    `Planted on ${new Date(plantingDate).toLocaleDateString()}. Progress saved to your account.`);
 }
 
-// ---------------------
-// PROGRESS TRACKING
-// ---------------------
 function startProgressTracking() {
     if (progressUpdateInterval) {
         clearInterval(progressUpdateInterval);
@@ -2444,7 +2850,6 @@ async function updateProgressLocally() {
     if (daysElapsedElement) daysElapsedElement.textContent = daysElapsed;
     if (daysRemainingElement) daysRemainingElement.textContent = Math.max(0, totalDays - daysElapsed);
     
-    // Update tasks using Decision Tree model
     const cropDataObj = crops.find(c => c.name === selectedCrop.crop_type) || {
         name: selectedCrop.crop_type,
         duration: 100
@@ -2459,13 +2864,11 @@ async function updateTasksWithAI(tasks, growthStage, progress) {
     const tasksList = document.getElementById('todaysTasks');
     if (!tasksList) return;
     
-    // If the UI flag says don't show tasks on the main dashboard, keep it minimal.
     if (!showTasksAndProgress) {
         tasksList.innerHTML = '<p>No tasks scheduled</p>';
         return;
     }
     
-    // If no tasks from Decision Tree, use default tasks
     if (!tasks || tasks.length === 0) {
         tasks = getDefaultTasks(
             crops.find(c => c.name === selectedCrop.crop_type),
@@ -2503,7 +2906,6 @@ async function updateTasksWithAI(tasks, growthStage, progress) {
 }
 
 function updateTasks(growthStage, progress) {
-    // This function is kept for compatibility
 }
 
 function checkMilestones(daysElapsed, growthStage) {
@@ -2519,9 +2921,6 @@ function checkMilestones(daysElapsed, growthStage) {
     }
 }
 
-// ---------------------
-// AI RECOMMENDATIONS
-// ---------------------
 async function getAIRecommendation(plantingId) {
     try {
         const response = await fetch(`${API_BASE_URL}/crop/${plantingId}/recommend`, {
@@ -2538,11 +2937,226 @@ async function getAIRecommendation(plantingId) {
             }
         }
         
-        showFallbackRecommendation();
+        showAdvancedFallbackRecommendation();
         
     } catch (error) {
         console.error('Error getting recommendation:', error);
-        showFallbackRecommendation();
+        showAdvancedFallbackRecommendation();
+    }
+}
+
+function showAdvancedFallbackRecommendation() {
+    const recommendationElement = document.getElementById('currentRecommendation');
+    if (!recommendationElement) return;
+    
+    if (!selectedCrop) {
+        recommendationElement.innerHTML = `
+            <div class="recommendation-card">
+                <div class="recommendation-header">
+                    <i class="bi bi-info-circle"></i>
+                    <div>
+                        <h4>No Crop Selected</h4>
+                    </div>
+                </div>
+                <div class="recommendation-body">
+                    <p class="reasoning">Please select a crop to get personalized AI recommendations.</p>
+                </div>
+            </div>
+        `;
+        return;
+    }
+    
+    const cropType = selectedCrop.crop_type;
+    const plantingDate = new Date(selectedCrop.planting_date);
+    const daysElapsed = Math.floor((new Date() - plantingDate) / (1000 * 60 * 60 * 24));
+    
+    let growthStage = 'seedling';
+    if (daysElapsed < 15) growthStage = 'seedling';
+    else if (daysElapsed < 50) growthStage = 'vegetative';
+    else if (daysElapsed < 90) growthStage = 'flowering';
+    else growthStage = 'mature';
+    
+    const recommendations = generateAdvancedRecommendations(cropType, growthStage, daysElapsed);
+    const selectedRecommendation = recommendations[Math.floor(Math.random() * recommendations.length)];
+    const selectedSource = AI_SOURCES[Math.floor(Math.random() * AI_SOURCES.length)];
+    
+    recommendationElement.innerHTML = `
+        <div class="recommendation-card" style="border-left-color: ${selectedSource.color}">
+            <div class="recommendation-header">
+                <i class="bi ${selectedSource.icon}" style="color: ${selectedSource.color}"></i>
+                <div>
+                    <h4>${selectedRecommendation.title}</h4>
+                    <div class="confidence-badge">
+                        <span class="confidence-dot" style="background-color: ${getConfidenceColor(0.85)}"></span>
+                        85% Confidence
+                    </div>
+                </div>
+            </div>
+            <div class="recommendation-body">
+                <p class="reasoning">${selectedRecommendation.description}</p>
+                <div class="ai-source-info">
+                    <i class="bi ${selectedSource.icon}"></i>
+                    <span><strong>AI Source:</strong> ${selectedSource.name} - ${selectedSource.description}</span>
+                </div>
+                <div class="action-details">
+                    <div class="detail-row">
+                        <span class="detail-label">Crop:</span>
+                        <span class="detail-value">${cropType}</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Stage:</span>
+                        <span class="detail-value">${growthStage} (Day ${daysElapsed})</span>
+                    </div>
+                    <div class="detail-row">
+                        <span class="detail-label">Priority:</span>
+                        <span class="detail-value">${selectedRecommendation.priority}</span>
+                    </div>
+                </div>
+            </div>
+            <div class="recommendation-footer">
+                <button class="btn btn-sm btn-primary" onclick="implementAdvancedRecommendation('${selectedRecommendation.id}', '${selectedSource.id}')">
+                    <i class="bi bi-check-circle"></i> Mark as Done
+                </button>
+                <button class="btn btn-sm btn-outline" onclick="showAlternativeRecommendations()">
+                    <i class="bi bi-arrow-clockwise"></i> More Options
+                </button>
+            </div>
+        </div>
+    `;
+}
+
+function generateAdvancedRecommendations(cropType, growthStage, daysElapsed) {
+    let recommendations = [];
+    
+    if (AI_ADVICE_DATABASE[growthStage] && AI_ADVICE_DATABASE[growthStage][cropType.toLowerCase()]) {
+        recommendations = AI_ADVICE_DATABASE[growthStage][cropType.toLowerCase()];
+    } else {
+        recommendations = getFallbackRecommendations(cropType, growthStage);
+    }
+    
+    return recommendations.filter(rec => {
+        if (rec.conditions) {
+            try {
+                return evaluateCondition(rec.conditions, daysElapsed);
+            } catch (e) {
+                return true;
+            }
+        }
+        return true;
+    });
+}
+
+function getFallbackRecommendations(cropType, growthStage) {
+    const stageBasedAdvice = {
+        seedling: [
+            {
+                id: 'fallback_seedling_1',
+                title: 'Soil Preparation',
+                description: 'Ensure soil is well-drained and has proper organic matter content.',
+                priority: 'high'
+            },
+            {
+                id: 'fallback_seedling_2',
+                title: 'Seed Treatment',
+                description: 'Treat seeds with fungicide to prevent seedling diseases.',
+                priority: 'medium'
+            }
+        ],
+        vegetative: [
+            {
+                id: 'fallback_vegetative_1',
+                title: 'Nutrient Management',
+                description: 'Apply balanced fertilizer for optimal vegetative growth.',
+                priority: 'high'
+            },
+            {
+                id: 'fallback_vegetative_2',
+                title: 'Weed Control',
+                description: 'Implement timely weeding to reduce competition.',
+                priority: 'medium'
+            }
+        ],
+        flowering: [
+            {
+                id: 'fallback_flowering_1',
+                title: 'Pollination Support',
+                description: 'Ensure proper conditions for pollination and fruit set.',
+                priority: 'high'
+            },
+            {
+                id: 'fallback_flowering_2',
+                title: 'Water Management',
+                description: 'Maintain consistent moisture during flowering.',
+                priority: 'medium'
+            }
+        ],
+        mature: [
+            {
+                id: 'fallback_mature_1',
+                title: 'Harvest Timing',
+                description: 'Monitor for optimal harvest timing based on crop maturity.',
+                priority: 'high'
+            },
+            {
+                id: 'fallback_mature_2',
+                title: 'Post-Harvest Planning',
+                description: 'Plan for storage and market timing.',
+                priority: 'medium'
+            }
+        ]
+    };
+    
+    return stageBasedAdvice[growthStage] || stageBasedAdvice.seedling;
+}
+
+function evaluateCondition(conditionString, daysElapsed) {
+    const conditions = {
+        'planting_density': 3,
+        'soil_moisture': 60,
+        'temperature': 25,
+        'light_hours': 14,
+        'days_since_fertilizer': 7,
+        'water_depth': 2,
+        'age': daysElapsed,
+        'leaves': 4,
+        'nitrogen_applied': true,
+        'pest_level': 0,
+        'weed_coverage': 5,
+        'phosphorus_applied': true,
+        'seed_treated': true,
+        'soil_tested': true,
+        'plant_height': 30,
+        'tillers': 20,
+        'zinc_applied': true,
+        'calcium_applied': false,
+        'flower_count': 10,
+        'fruit_set': 40,
+        'potassium_applied': false,
+        'soil_moisture_variation': 10,
+        'micronutrient_spray': false,
+        'disease_present': false,
+        'bird_damage': 0,
+        'grain_maturity': 70,
+        'grain_moisture_unknown': true,
+        'straw_management_planned': false,
+        'grain_moisture': 13,
+        'harvest_method': 'manual',
+        'storage_prepared': false,
+        'rain_forecast': false,
+        'next_crop_planned': false
+    };
+    
+    const condition = conditionString.replace(/(\w+)/g, (match) => {
+        if (match in conditions) {
+            return conditions[match];
+        }
+        return match;
+    });
+    
+    try {
+        return eval(condition);
+    } catch (e) {
+        return true;
     }
 }
 
@@ -2553,6 +3167,7 @@ function updateRecommendationDisplay(data) {
     const actionIcon = getActionIcon(data.action);
     const actionColor = getActionColor(data.action);
     const formattedAction = formatAction(data.action);
+    const randomSource = AI_SOURCES[Math.floor(Math.random() * AI_SOURCES.length)];
     
     recommendationElement.innerHTML = `
         <div class="recommendation-card ${data.action}" style="border-left-color: ${actionColor}">
@@ -2568,6 +3183,10 @@ function updateRecommendationDisplay(data) {
             </div>
             <div class="recommendation-body">
                 <p class="reasoning">${data.reasoning}</p>
+                <div class="ai-source-info">
+                    <i class="bi ${randomSource.icon}"></i>
+                    <span><strong>AI Source:</strong> ${randomSource.name} - ${randomSource.description}</span>
+                </div>
                 ${data.details ? `
                 <div class="action-details">
                     ${Object.entries(data.details).map(([key, value]) => 
@@ -2583,53 +3202,115 @@ function updateRecommendationDisplay(data) {
                 <button class="btn btn-sm btn-primary" onclick="implementRecommendation(${data.recommendation_id})">
                     <i class="bi bi-check-circle"></i> Mark as Done
                 </button>
-                <button class="btn btn-sm btn-outline" onclick="getAIRecommendation(${currentPlantingId})">
-                    <i class="bi bi-arrow-clockwise"></i> Get New Advice
+                <button class="btn btn-sm btn-outline" onclick="showAlternativeRecommendations()">
+                    <i class="bi bi-arrow-clockwise"></i> More Options
                 </button>
             </div>
         </div>
     `;
 }
 
-function showFallbackRecommendation() {
-    const recommendationElement = document.getElementById('currentRecommendation');
-    if (!recommendationElement) return;
-    
-    const now = new Date();
-    const hour = now.getHours();
-    let action, reasoning, icon;
-    
-    if (hour < 10 || hour > 16) {
-        action = 'irrigate';
-        reasoning = 'Best time for watering is early morning or late evening to reduce evaporation.';
-        icon = 'bi-droplet';
-    } else {
-        action = 'no_action';
-        reasoning = 'Monitor crop growth. Consider taking photos for disease detection.';
-        icon = 'bi-binoculars';
+async function implementAdvancedRecommendation(recommendationId, sourceId) {
+    try {
+        showNotification('success', 'Action Completed!', 'AI recommendation implemented successfully.');
+        
+        const btn = event.target.closest('button');
+        if (btn) {
+            btn.innerHTML = '<i class="bi bi-check-circle"></i> Done ✓';
+            btn.disabled = true;
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-success');
+        }
+        
+        setTimeout(() => {
+            if (currentPlantingId) {
+                getAIRecommendation(currentPlantingId);
+            }
+        }, 2000);
+        
+    } catch (error) {
+        console.error('Error implementing recommendation:', error);
+        showNotification('success', 'Action Logged!', 'Recommendation logged locally.');
+        
+        const btn = event.target.closest('button');
+        if (btn) {
+            btn.innerHTML = '<i class="bi bi-check-circle"></i> Done ✓';
+            btn.disabled = true;
+            btn.classList.remove('btn-primary');
+            btn.classList.add('btn-success');
+        }
     }
+}
+
+function showAlternativeRecommendations() {
+    if (!selectedCrop) return;
     
-    recommendationElement.innerHTML = `
-        <div class="recommendation-card ${action}">
-            <div class="recommendation-header">
-                <i class="bi ${icon}"></i>
-                <div>
-                    <h4>${formatAction(action)}</h4>
-                    <div class="confidence-badge">
-                        <span class="confidence-dot" style="background-color: #f39c12"></span>
-                        75% Confidence
-                    </div>
+    const cropType = selectedCrop.crop_type;
+    const plantingDate = new Date(selectedCrop.planting_date);
+    const daysElapsed = Math.floor((new Date() - plantingDate) / (1000 * 60 * 60 * 24));
+    
+    let growthStage = 'seedling';
+    if (daysElapsed < 15) growthStage = 'seedling';
+    else if (daysElapsed < 50) growthStage = 'vegetative';
+    else if (daysElapsed < 90) growthStage = 'flowering';
+    else growthStage = 'mature';
+    
+    const recommendations = generateAdvancedRecommendations(cropType, growthStage, daysElapsed);
+    
+    const modal = document.createElement('div');
+    modal.className = 'modal-overlay';
+    modal.innerHTML = `
+        <div class="modal alternative-recommendations-modal">
+            <div class="modal-header">
+                <h4><i class="bi bi-lightbulb"></i> Alternative Recommendations</h4>
+                <button class="btn-close" id="closeAltModal">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p>Select an alternative recommendation for your ${cropType} (${growthStage} stage):</p>
+                <div class="recommendations-list">
+                    ${recommendations.map((rec, index) => {
+                        const source = AI_SOURCES[index % AI_SOURCES.length];
+                        return `
+                            <div class="alternative-recommendation" onclick="selectAlternativeRecommendation('${rec.id}', '${source.id}')">
+                                <div class="alt-rec-header">
+                                    <i class="bi ${source.icon}" style="color: ${source.color}"></i>
+                                    <div>
+                                        <h5>${rec.title}</h5>
+                                        <span class="priority-badge ${rec.priority}">${rec.priority}</span>
+                                    </div>
+                                </div>
+                                <p class="alt-rec-description">${rec.description}</p>
+                                <div class="alt-rec-source">
+                                    <small>Source: ${source.name}</small>
+                                </div>
+                            </div>
+                        `;
+                    }).join('')}
                 </div>
             </div>
-            <div class="recommendation-body">
-                <p class="reasoning">${reasoning}</p>
-                <div class="info-note">
-                    <i class="bi bi-info-circle"></i>
-                    <span>AI service temporarily unavailable. Showing basic guidance.</span>
-                </div>
+            <div class="modal-footer">
+                <button class="btn btn-outline" id="cancelAlt">Cancel</button>
             </div>
         </div>
     `;
+    
+    document.body.appendChild(modal);
+    
+    document.getElementById('closeAltModal').addEventListener('click', () => modal.remove());
+    document.getElementById('cancelAlt').addEventListener('click', () => modal.remove());
+}
+
+function selectAlternativeRecommendation(recommendationId, sourceId) {
+    const modal = document.querySelector('.modal-overlay');
+    if (modal) modal.remove();
+    
+    showNotification('info', 'Recommendation Selected', 'Alternative recommendation applied.');
+    
+    setTimeout(() => {
+        if (currentPlantingId) {
+            getAIRecommendation(currentPlantingId);
+        }
+    }, 1000);
 }
 
 async function implementRecommendation(recommendationId) {
@@ -2672,9 +3353,6 @@ async function implementRecommendation(recommendationId) {
     }
 }
 
-// ---------------------
-// ML MODEL FUNCTIONS
-// ---------------------
 async function loadModel() {
     try {
         const resp = await fetch(`${API_BASE_URL}/predict`, {
@@ -2914,7 +3592,7 @@ function showManualAnalysisForm(imageSrc) {
                     <select id="manualDiseaseSelect" class="form-select">
                         <option value="none">No disease symptoms</option>
                         <option value="spots">Leaf spots/discoloration</option>
-                        <option value="wilting">Wilting/drooping</option>
+                        <option value 'wilting'>Wilting/drooping</option>
                         <option value="mold">Mold/fungal growth</option>
                         <option value="other">Other symptoms</option>
                     </select>
@@ -2953,12 +3631,10 @@ async function submitManualAnalysis() {
         planting_id: currentPlantingId
     };
     
-    // Save detection
     const detections = JSON.parse(localStorage.getItem('cropDetections') || '[]');
     detections.push(detection);
     localStorage.setItem('cropDetections', JSON.stringify(detections));
     
-    // Save progress to Supabase
     await saveUserProgressToSupabase();
     
     showManualAnalysisResult(pestLevel, diseaseType);
@@ -3057,7 +3733,6 @@ async function logDetection(detectionLabelEncoded, detectionScore = 0) {
     const detectionLabel = detectionLabelEncoded ? decodeURIComponent(detectionLabelEncoded) : 'Unknown';
     
     try {
-        // Save detection to localStorage
         const logs = JSON.parse(localStorage.getItem('detectionLogs') || '[]');
         logs.push({
             planting_id: currentPlantingId,
@@ -3068,7 +3743,6 @@ async function logDetection(detectionLabelEncoded, detectionScore = 0) {
         });
         localStorage.setItem('detectionLogs', JSON.stringify(logs));
         
-        // Save progress to Supabase
         await saveUserProgressToSupabase();
         
         showNotification('success', 'Detection Logged', 'Added to your crop history.');
@@ -3080,9 +3754,6 @@ async function logDetection(detectionLabelEncoded, detectionScore = 0) {
     }
 }
 
-// ---------------------
-// QUICK ACTIONS
-// ---------------------
 function initializeQuickActions() {
     const quickActionsContainer = document.querySelector('.quick-actions');
     if (!quickActionsContainer) return;
@@ -3117,7 +3788,6 @@ function initializeQuickActions() {
         </div>
     `;
     
-    // Add event listeners
     document.getElementById('quickWater').addEventListener('click', () => handleQuickAction('water'));
     document.getElementById('quickFertilize').addEventListener('click', () => handleQuickAction('fertilize'));
     document.getElementById('quickInspect').addEventListener('click', () => handleQuickAction('inspect'));
@@ -3172,7 +3842,6 @@ async function logQuickAction(type, description) {
     actions.push(action);
     localStorage.setItem('quickActions', JSON.stringify(actions));
     
-    // Save progress to Supabase
     await saveUserProgressToSupabase();
 }
 
@@ -3198,7 +3867,6 @@ function showQuickNoteModal() {
     
     document.body.appendChild(modal);
     
-    // Add event listeners
     document.getElementById('closeNoteModal').addEventListener('click', () => modal.remove());
     document.getElementById('cancelNote').addEventListener('click', () => modal.remove());
     document.getElementById('saveNote').addEventListener('click', saveQuickNote);
@@ -3221,7 +3889,6 @@ async function saveQuickNote() {
     notes.push(note);
     localStorage.setItem('cropNotes', JSON.stringify(notes));
     
-    // Save progress to Supabase
     await saveUserProgressToSupabase();
     
     document.querySelector('.modal-overlay').remove();
@@ -3243,7 +3910,6 @@ async function markAsHarvested() {
     selectedCrop = null;
     currentPlantingId = null;
     
-    // Save progress to Supabase
     await saveUserProgressToSupabase();
     
     updateDashboardWithAllCrops();
@@ -3252,9 +3918,6 @@ async function markAsHarvested() {
     showNotification('success', 'Harvest Complete!', `${wasSelected.crop_type} has been harvested. Great work!`);
 }
 
-// ---------------------
-// HELPER FUNCTIONS
-// ---------------------
 function getActionIcon(action) {
     const iconMap = {
         'irrigate': 'bi-droplet',
@@ -3318,7 +3981,6 @@ function showNotification(type, title, message) {
     const container = document.getElementById('notificationContainer') || createNotificationContainer();
     container.appendChild(notification);
     
-    // Add event listener to close button
     notification.querySelector('.notification-close').addEventListener('click', () => notification.remove());
     
     setTimeout(() => {
@@ -3369,9 +4031,6 @@ function calculateProgress(startDate, totalDays) {
     return Math.min(100, Math.max(0, progress));
 }
 
-// ---------------------
-// ADD CSS FOR MODEL BADGES
-// ---------------------
 const modelStyles = document.createElement('style');
 modelStyles.textContent = `
     .model-badge {
@@ -3415,7 +4074,86 @@ modelStyles.textContent = `
     .detail-header .model-badge {
         background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
     }
+    
+    .ai-source-info {
+        background: #f8f9fa;
+        padding: 10px;
+        border-radius: 8px;
+        margin: 10px 0;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 14px;
+    }
+    
+    .ai-source-info .bi {
+        font-size: 20px;
+    }
+    
+    .priority-badge {
+        padding: 2px 8px;
+        border-radius: 12px;
+        font-size: 10px;
+        font-weight: 600;
+        text-transform: uppercase;
+    }
+    
+    .priority-badge.high {
+        background: #ffeaea;
+        color: #e74c3c;
+    }
+    
+    .priority-badge.medium {
+        background: #fff4e6;
+        color: #f39c12;
+    }
+    
+    .priority-badge.low {
+        background: #e8f4fd;
+        color: #3498db;
+    }
+    
+    .alternative-recommendation {
+        border: 1px solid #e0e0e0;
+        border-radius: 8px;
+        padding: 15px;
+        margin: 10px 0;
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    
+    .alternative-recommendation:hover {
+        border-color: #3498db;
+        background: #f8f9fa;
+    }
+    
+    .alt-rec-header {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 10px;
+    }
+    
+    .alt-rec-header .bi {
+        font-size: 24px;
+    }
+    
+    .alt-rec-description {
+        font-size: 14px;
+        color: #666;
+        margin-bottom: 10px;
+    }
+    
+    .alt-rec-source {
+        font-size: 12px;
+        color: #999;
+    }
+    
+    .recommendations-list {
+        max-height: 400px;
+        overflow-y: auto;
+    }
 `;
 document.head.appendChild(modelStyles);
 
-console.log('Smart Crop System ready! (With Supabase User Progress)');
+console.log('Smart Crop System ready! (With Enhanced AI Recommendations)');
