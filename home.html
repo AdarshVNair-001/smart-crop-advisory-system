@@ -3,31 +3,1883 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Smart Crop Advisory System</title>
-    <link rel="stylesheet" href="style.css">
-    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-
+    <title>Smart Crop Advisory System - AI Powered</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=Playfair+Display:wght@600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        :root {
+            --primary: #10b981;
+            --primary-dark: #059669;
+            --primary-light: #34d399;
+            --primary-glow: rgba(16, 185, 129, 0.3);
+            --secondary: #6366f1;
+            --accent: #f59e0b;
+            --background: #0f1419;
+            --surface: #1a1f2e;
+            --surface-light: #252d3d;
+            --surface-hover: #2a3346;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --text-muted: #64748b;
+            --border: rgba(255, 255, 255, 0.08);
+            --gradient-primary: linear-gradient(135deg, #10b981 0%, #059669 50%, #047857 100%);
+            --gradient-card: linear-gradient(145deg, rgba(26, 31, 46, 0.9), rgba(37, 45, 61, 0.6));
+            --gradient-glow: radial-gradient(ellipse at center, rgba(16, 185, 129, 0.15), transparent 70%);
+            --shadow-lg: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+            --shadow-glow: 0 0 40px rgba(16, 185, 129, 0.2);
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background: var(--background);
+            color: var(--text-primary);
+            min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Animated Background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                radial-gradient(ellipse at 20% 20%, rgba(16, 185, 129, 0.08) 0%, transparent 50%),
+                radial-gradient(ellipse at 80% 80%, rgba(99, 102, 241, 0.06) 0%, transparent 50%),
+                radial-gradient(ellipse at 50% 50%, rgba(245, 158, 11, 0.04) 0%, transparent 60%);
+            pointer-events: none;
+            z-index: 0;
+        }
+
+        /* Top Bar */
+        #top_bar {
+            background: rgba(26, 31, 46, 0.95);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid var(--border);
+            padding: 20px 32px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+        }
+
+        #menuToggle {
+            font-size: 1.5rem;
+            cursor: pointer;
+            color: var(--text-secondary);
+            padding: 10px;
+            border-radius: 12px;
+            transition: all 0.3s ease;
+        }
+
+        #menuToggle:hover {
+            background: var(--surface-light);
+            color: var(--primary);
+        }
+
+        .c_head {
+            font-family: 'Playfair Display', serif;
+            font-size: 1.8rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary-light), var(--primary), var(--secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .weather-widget {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--surface-light);
+            padding: 12px 24px;
+            border-radius: 50px;
+            border: 1px solid var(--border);
+        }
+
+        .weather-widget i {
+            font-size: 1.5rem;
+            color: var(--accent);
+        }
+
+        .weather-widget span {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        /* Side Navigation */
+        .side-nav {
+            position: fixed;
+            left: -320px;
+            top: 0;
+            width: 300px;
+            height: 100vh;
+            background: rgba(26, 31, 46, 0.98);
+            backdrop-filter: blur(20px);
+            border-right: 1px solid var(--border);
+            z-index: 200;
+            transition: all 0.4s cubic-bezier(0.4, 0, 0.2, 1);
+            display: flex;
+            flex-direction: column;
+        }
+
+        .side-nav.active {
+            left: 0;
+            box-shadow: var(--shadow-lg);
+        }
+
+        .nav-header {
+            padding: 24px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .nav-header h3 {
+            font-size: 1.3rem;
+            color: var(--text-primary);
+            font-weight: 600;
+        }
+
+        #closeNav {
+            cursor: pointer;
+            font-size: 1.5rem;
+            color: var(--text-secondary);
+            padding: 8px;
+            border-radius: 8px;
+            transition: all 0.3s ease;
+        }
+
+        #closeNav:hover {
+            background: var(--surface-hover);
+            color: var(--primary);
+        }
+
+        .nav-menu {
+            list-style: none;
+            padding: 24px 16px;
+            flex: 1;
+            overflow-y: auto;
+        }
+
+        .nav-menu li {
+            margin-bottom: 8px;
+        }
+
+        .nav-item {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 16px 20px;
+            color: var(--text-secondary);
+            text-decoration: none;
+            border-radius: 14px;
+            transition: all 0.3s ease;
+            font-weight: 500;
+            font-size: 1rem;
+        }
+
+        .nav-item i {
+            font-size: 1.3rem;
+            width: 28px;
+            text-align: center;
+        }
+
+        .nav-item:hover {
+            background: var(--surface-hover);
+            color: var(--text-primary);
+            transform: translateX(4px);
+        }
+
+        .nav-item.active {
+            background: var(--gradient-primary);
+            color: white;
+            box-shadow: 0 4px 20px var(--primary-glow);
+        }
+
+        /* Main Content */
+        .main-content {
+            padding: 40px;
+            max-width: 1400px;
+            margin: 0 auto;
+            width: 100%;
+        }
+
+        /* Page styles */
+        .page {
+            display: none;
+            animation: fadeInUp 0.5s ease;
+        }
+
+        .page.active {
+            display: block;
+        }
+
+        @keyframes fadeInUp {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Page Header */
+        .page-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 40px;
+            flex-wrap: wrap;
+            gap: 20px;
+        }
+
+        .page-header h2 {
+            font-family: 'Playfair Display', serif;
+            font-size: 2.5rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--primary), var(--accent));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .location-display {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            background: var(--surface);
+            padding: 14px 24px;
+            border-radius: 50px;
+            border: 1px solid var(--border);
+        }
+
+        .location-display i {
+            color: var(--primary);
+        }
+
+        .location-display span {
+            color: var(--text-secondary);
+            font-weight: 500;
+        }
+
+        .btn-small {
+            background: transparent;
+            color: var(--primary);
+            border: 1px solid var(--primary);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.9rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+
+        .btn-small:hover {
+            background: var(--primary);
+            color: white;
+        }
+
+        /* Dashboard Grid */
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 30px;
+            margin-bottom: 40px;
+        }
+
+        .dashboard-card {
+            background: var(--gradient-card);
+            backdrop-filter: blur(10px);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 32px;
+            transition: all 0.4s ease;
+            min-height: 200px;
+        }
+
+        .dashboard-card:hover {
+            transform: translateY(-5px);
+            border-color: rgba(16, 185, 129, 0.3);
+            box-shadow: var(--shadow-glow);
+        }
+
+        .dashboard-card h3 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 24px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .dashboard-card h3 i {
+            color: var(--primary);
+        }
+
+        /* Dashboard Crop Cards */
+        .dashboard-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .dashboard-header h3 {
+            margin: 0;
+            font-size: 1.4rem;
+        }
+
+        .crops-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .dashboard-crop-card {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 24px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+        }
+
+        .dashboard-crop-card:hover {
+            transform: translateY(-3px);
+            border-color: var(--primary);
+            box-shadow: var(--shadow-glow);
+        }
+
+        .dashboard-crop-card.selected {
+            border-color: var(--primary);
+            background: rgba(16, 185, 129, 0.1);
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.2);
+        }
+
+        .crop-card-header {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .crop-card-header i {
+            font-size: 2rem;
+            color: var(--primary);
+        }
+
+        .crop-card-header h4 {
+            font-size: 1.2rem;
+            font-weight: 600;
+        }
+
+        .crop-age {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .crop-progress {
+            margin-bottom: 20px;
+        }
+
+        .crop-details {
+            margin-bottom: 20px;
+        }
+
+        .detail-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .detail-row:last-child {
+            border-bottom: none;
+        }
+
+        .detail-label {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .detail-value {
+            color: var(--text-secondary);
+            font-weight: 500;
+            font-size: 0.9rem;
+        }
+
+        .crop-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        .btn {
+            padding: 10px 20px;
+            border-radius: 12px;
+            border: none;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 0.95rem;
+        }
+
+        .btn-primary {
+            background: var(--gradient-primary);
+            color: white;
+            box-shadow: 0 4px 20px var(--primary-glow);
+        }
+
+        .btn-primary:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 30px var(--primary-glow);
+        }
+
+        .btn-outline {
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+
+        .btn-outline:hover {
+            background: var(--surface-hover);
+            border-color: var(--primary);
+            color: var(--text-primary);
+        }
+
+        .btn-sm {
+            padding: 8px 16px;
+            font-size: 0.85rem;
+        }
+
+        /* Delete button specific styling */
+        .remove-crop-btn {
+            background: rgba(239, 68, 68, 0.1);
+            color: #ef4444;
+            border: 1px solid rgba(239, 68, 68, 0.3);
+        }
+
+        .remove-crop-btn:hover {
+            background: #ef4444;
+            color: white;
+        }
+
+        /* Progress Bar */
+        .progress-container {
+            margin-top: 20px;
+        }
+
+        .progress-bar {
+            height: 12px;
+            background: var(--surface);
+            border-radius: 20px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: var(--gradient-primary);
+            border-radius: 20px;
+            transition: width 1s ease;
+        }
+
+        .progress-text {
+            font-size: 1.1rem;
+            font-weight: 600;
+            color: var(--primary-light);
+        }
+
+        /* Tasks */
+        .tasks-list {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .task-item {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+            padding: 16px;
+            background: var(--surface);
+            border-radius: 14px;
+            border: 1px solid var(--border);
+            transition: all 0.3s ease;
+        }
+
+        .task-item:hover {
+            background: var(--surface-hover);
+            transform: translateX(8px);
+        }
+
+        .task-item i {
+            font-size: 1.2rem;
+            color: var(--primary);
+        }
+
+        .task-content {
+            flex: 1;
+        }
+
+        .task-title {
+            font-weight: 600;
+            margin-bottom: 4px;
+            font-size: 0.95rem;
+        }
+
+        .task-description {
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            line-height: 1.4;
+        }
+
+        .task-check {
+            color: var(--primary);
+            cursor: pointer;
+            font-size: 1.5rem;
+            padding: 5px;
+            border-radius: 50%;
+            transition: all 0.3s ease;
+        }
+
+        .task-check:hover {
+            background: rgba(16, 185, 129, 0.1);
+        }
+
+        /* AI Recommendations */
+        .ai-recommendations {
+            margin-top: 40px;
+        }
+
+        .recommendations-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(350px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        .recommendation-card {
+            background: var(--gradient-card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 24px;
+            position: relative;
+            overflow: hidden;
+            transition: all 0.3s ease;
+            border-left: 4px solid var(--primary);
+        }
+
+        .recommendation-card:hover {
+            transform: translateY(-3px);
+            border-color: var(--primary);
+            box-shadow: var(--shadow-glow);
+        }
+
+        .recommendation-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 16px;
+        }
+
+        .recommendation-header i {
+            font-size: 1.5rem;
+            color: var(--primary);
+        }
+
+        .recommendation-header h4 {
+            font-size: 1.1rem;
+            font-weight: 600;
+            flex: 1;
+        }
+
+        .confidence-badge {
+            background: var(--surface-light);
+            color: var(--text-secondary);
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 500;
+            display: inline-flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .confidence-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #2ecc71;
+        }
+
+        .reasoning {
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+            line-height: 1.6;
+            margin-bottom: 16px;
+        }
+
+        .ai-source-info {
+            background: var(--surface);
+            padding: 10px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 0.85rem;
+            color: var(--text-muted);
+            margin: 16px 0;
+        }
+
+        .ai-source-info i {
+            color: var(--primary);
+        }
+
+        .action-details {
+            margin-top: 16px;
+            padding-top: 16px;
+            border-top: 1px solid var(--border);
+        }
+
+        .recommendation-footer {
+            display: flex;
+            gap: 10px;
+            margin-top: 20px;
+        }
+
+        /* Plants Grid */
+        .plants-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+            gap: 24px;
+            margin-top: 30px;
+        }
+
+        .plant-card {
+            background: var(--gradient-card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 28px;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.4s ease;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .plant-card:hover {
+            transform: translateY(-8px) scale(1.02);
+            border-color: var(--primary);
+            box-shadow: var(--shadow-glow);
+        }
+
+        .plant-card i {
+            font-size: 4rem;
+            margin-bottom: 20px;
+            display: block;
+            color: var(--primary);
+        }
+
+        .plant-card h4 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .plant-card p {
+            font-size: 0.95rem;
+            color: var(--text-muted);
+            margin-bottom: 5px;
+        }
+
+        .btn-plant {
+            margin-top: 15px;
+            background: rgba(16, 185, 129, 0.1);
+            color: var(--primary);
+            border: 1px solid var(--primary);
+            padding: 10px 20px;
+            border-radius: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            font-weight: 500;
+        }
+
+        .btn-plant:hover {
+            background: var(--primary);
+            color: white;
+        }
+
+        /* Pest Detection */
+        .upload-area {
+            background: var(--gradient-card);
+            border: 2px dashed var(--border);
+            border-radius: 24px;
+            padding: 60px;
+            text-align: center;
+            transition: all 0.3s ease;
+            margin-bottom: 32px;
+        }
+
+        .upload-area:hover {
+            border-color: var(--primary);
+            background: rgba(16, 185, 129, 0.05);
+        }
+
+        .upload-area i {
+            font-size: 4rem;
+            color: var(--primary);
+            margin-bottom: 20px;
+        }
+
+        .upload-area p {
+            color: var(--text-secondary);
+            margin-bottom: 24px;
+            font-size: 1.1rem;
+        }
+
+        .upload-area input {
+            display: none;
+        }
+
+        /* Detection Results */
+        .detection-results {
+            background: var(--gradient-card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 32px;
+            margin-top: 30px;
+        }
+
+        .result-list {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            margin: 25px 0;
+        }
+
+        .result-item {
+            background: var(--surface);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            padding: 20px;
+            transition: all 0.3s ease;
+        }
+
+        .result-item.problem {
+            border-left: 4px solid #e74c3c;
+        }
+
+        .result-item.healthy {
+            border-left: 4px solid #2ecc71;
+        }
+
+        .result-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 12px;
+        }
+
+        .result-header i {
+            font-size: 1.3rem;
+        }
+
+        .result-header i.bi-exclamation-triangle {
+            color: #e74c3c;
+        }
+
+        .result-header i.bi-check-circle {
+            color: #2ecc71;
+        }
+
+        .confidence-bar {
+            height: 6px;
+            background: var(--surface-light);
+            border-radius: 3px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+
+        .confidence-fill {
+            height: 100%;
+            background: var(--gradient-primary);
+            border-radius: 3px;
+            transition: width 1s ease;
+        }
+
+        .confidence-text {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .result-advice {
+            background: rgba(245, 158, 11, 0.1);
+            padding: 12px;
+            border-radius: 10px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 12px;
+        }
+
+        .result-advice i {
+            color: #f59e0b;
+        }
+
+        .result-actions {
+            display: flex;
+            gap: 15px;
+            margin-top: 25px;
+        }
+
+        /* Manual Analysis */
+        .manual-analysis {
+            background: var(--gradient-card);
+            border: 1px solid var(--border);
+            border-radius: 20px;
+            padding: 32px;
+            margin-top: 30px;
+        }
+
+        .form-group {
+            margin-bottom: 25px;
+        }
+
+        .form-group label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 500;
+            margin-bottom: 10px;
+            color: var(--text-secondary);
+        }
+
+        .form-select {
+            width: 100%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 14px 18px;
+            border-radius: 12px;
+            font-size: 1rem;
+            cursor: pointer;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+
+        .form-select:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-glow);
+        }
+
+        .form-textarea {
+            width: 100%;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 14px 18px;
+            border-radius: 12px;
+            font-size: 1rem;
+            min-height: 120px;
+            resize: vertical;
+            outline: none;
+            transition: all 0.3s ease;
+        }
+
+        .form-textarea:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-glow);
+        }
+
+        .form-actions {
+            display: flex;
+            gap: 15px;
+            margin-top: 30px;
+        }
+
+        /* Weather Page */
+        .weather-container {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+            gap: 32px;
+            margin-top: 30px;
+        }
+
+        .past-weather, .future-weather {
+            background: var(--gradient-card);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 32px;
+        }
+
+        .past-weather h3, .future-weather h3 {
+            font-size: 1.3rem;
+            margin-bottom: 24px;
+            color: var(--text-primary);
+        }
+
+        .weather-days {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+
+        .weather-day {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            background: var(--surface);
+            border-radius: 14px;
+            transition: all 0.3s ease;
+        }
+
+        .weather-day:hover {
+            background: var(--surface-hover);
+        }
+
+        /* Fertilizer Page */
+        .fertilizer-container {
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 32px;
+            margin-top: 30px;
+        }
+
+        .fert-form {
+            background: var(--gradient-card);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 32px;
+            height: fit-content;
+        }
+
+        .fert-form label {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 500;
+            margin-bottom: 10px;
+            color: var(--text-secondary);
+        }
+
+        .fert-form label i {
+            color: var(--primary);
+        }
+
+        .fert-results {
+            background: var(--gradient-card);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 32px;
+        }
+
+        .fert-result-card {
+            background: var(--surface);
+            border-radius: 20px;
+            padding: 30px;
+        }
+
+        .result-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 25px;
+            flex-wrap: wrap;
+            gap: 15px;
+        }
+
+        .result-context {
+            display: flex;
+            gap: 15px;
+            flex-wrap: wrap;
+        }
+
+        .context-item {
+            background: var(--surface-light);
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 0.85rem;
+            color: var(--text-secondary);
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .fertilizer-name-box {
+            background: rgba(16, 185, 129, 0.1);
+            padding: 25px;
+            border-radius: 16px;
+            margin: 20px 0;
+            border: 1px solid var(--primary);
+        }
+
+        .fertilizer-name-box h2 {
+            color: var(--primary);
+            margin-bottom: 8px;
+        }
+
+        .fertilizer-type {
+            color: var(--text-muted);
+            font-size: 1rem;
+        }
+
+        .details-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin: 20px 0;
+        }
+
+        .detail-box {
+            background: var(--surface);
+            padding: 15px;
+            border-radius: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .detail-value {
+            color: var(--text-primary);
+            font-weight: 600;
+            font-size: 1rem;
+        }
+
+        /* Modal Overlay */
+        .modal-overlay {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            backdrop-filter: blur(10px);
+            z-index: 2000;
+            display: none;
+            justify-content: center;
+            align-items: center;
+            animation: fadeIn 0.3s ease;
+        }
+
+        .modal-overlay.active {
+            display: flex !important;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to { opacity: 1; }
+        }
+
+        .modal {
+            background: var(--gradient-card);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--border);
+            border-radius: 24px;
+            padding: 48px;
+            max-width: 500px;
+            width: 90%;
+            text-align: center;
+            position: relative;
+            box-shadow: var(--shadow-lg), var(--shadow-glow);
+            animation: slideUp 0.4s ease;
+            z-index: 2001;
+        }
+
+        @keyframes slideUp {
+            from { transform: translateY(30px); opacity: 0; }
+            to { transform: translateY(0); opacity: 1; }
+        }
+
+        .modal-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .modal-header h4 {
+            font-family: 'Playfair Display', serif;
+            font-size: 1.5rem;
+            color: var(--primary);
+        }
+
+        .btn-close {
+            background: var(--surface-light);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            width: 40px;
+            height: 40px;
+            border-radius: 12px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            font-size: 1.5rem;
+            border: none;
+        }
+
+        .btn-close:hover {
+            background: var(--surface-hover);
+            color: var(--text-primary);
+            transform: rotate(90deg);
+        }
+
+        .modal-body {
+            margin-bottom: 24px;
+        }
+
+        .modal-footer {
+            display: flex;
+            gap: 12px;
+            justify-content: flex-end;
+        }
+
+        /* Location Options */
+        .location-options {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            margin-top: 24px;
+        }
+
+        .manual-location {
+            display: flex;
+            gap: 12px;
+        }
+
+        .manual-location input {
+            flex: 1;
+            background: var(--surface);
+            border: 1px solid var(--border);
+            color: var(--text-primary);
+            padding: 16px 20px;
+            border-radius: 12px;
+            font-size: 1rem;
+            outline: none;
+        }
+
+        .manual-location input:focus {
+            border-color: var(--primary);
+            box-shadow: 0 0 0 3px var(--primary-glow);
+        }
+
+        /* Overlay for sidebar */
+        .overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            opacity: 0;
+            visibility: hidden;
+            transition: all 0.3s ease;
+            z-index: 150;
+            backdrop-filter: blur(5px);
+        }
+
+        .overlay.active {
+            opacity: 1;
+            visibility: visible;
+        }
+
+        /* Bottom Bar */
+        .bottom-bar {
+            background: rgba(26, 31, 46, 0.9);
+            border-top: 1px solid var(--border);
+            padding: 24px 32px;
+            text-align: center;
+            margin-top: 60px;
+        }
+
+        .bottom-bar p {
+            color: var(--text-muted);
+            font-size: 0.95rem;
+        }
+
+        /* Notifications */
+        .notification-container {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            z-index: 9999;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .notification {
+            background: var(--gradient-card);
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            box-shadow: var(--shadow-lg);
+            animation: slideInRight 0.3s ease;
+            max-width: 350px;
+        }
+
+        @keyframes slideInRight {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+
+        .notification-icon i {
+            font-size: 1.5rem;
+        }
+
+        .notification-success .notification-icon i { color: #10b981; }
+        .notification-error .notification-icon i { color: #ef4444; }
+        .notification-warning .notification-icon i { color: #f59e0b; }
+        .notification-info .notification-icon i { color: #3b82f6; }
+
+        .notification-content {
+            flex: 1;
+        }
+
+        .notification-title {
+            font-weight: 600;
+            margin-bottom: 4px;
+            color: var(--text-primary);
+        }
+
+        .notification-message {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+
+        .notification-close {
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            font-size: 1.2rem;
+            cursor: pointer;
+            padding: 4px;
+            border-radius: 6px;
+            transition: all 0.3s ease;
+        }
+
+        .notification-close:hover {
+            background: var(--surface-hover);
+            color: var(--text-primary);
+        }
+
+        /* Loading Spinner */
+        .loading-analysis {
+            text-align: center;
+            padding: 40px;
+            color: var(--text-secondary);
+        }
+
+        .spinner {
+            display: inline-block;
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(255, 255, 255, 0.1);
+            border-radius: 50%;
+            border-top-color: var(--primary);
+            animation: spin 1s ease-in-out infinite;
+            margin-bottom: 16px;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        /* Empty State */
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state i {
+            font-size: 3.5rem;
+            color: var(--primary);
+            margin-bottom: 20px;
+            opacity: 0.5;
+        }
+
+        .empty-state h4 {
+            font-size: 1.3rem;
+            margin-bottom: 12px;
+            color: var(--text-primary);
+        }
+
+        .empty-state p {
+            margin-bottom: 25px;
+            max-width: 300px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+
+        /* Model Badges */
+        .model-badge {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            display: inline-flex;
+            align-items: center;
+            gap: 5px;
+            margin-left: 10px;
+        }
+        
+        .model-badge-small {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--primary);
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            display: inline-block;
+        }
+
+        /* Alternative Recommendations */
+        .alternative-recommendations-modal {
+            max-width: 600px;
+        }
+
+        .recommendations-list {
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .alternative-recommendation {
+            border: 1px solid var(--border);
+            border-radius: 12px;
+            padding: 16px;
+            margin: 10px 0;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .alternative-recommendation:hover {
+            border-color: var(--primary);
+            background: var(--surface);
+        }
+
+        .alt-rec-header {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-bottom: 10px;
+        }
+
+        .alt-rec-header i {
+            font-size: 1.5rem;
+        }
+
+        .alt-rec-header h5 {
+            font-size: 1rem;
+            font-weight: 600;
+            flex: 1;
+        }
+
+        .priority-badge {
+            padding: 2px 8px;
+            border-radius: 12px;
+            font-size: 0.7rem;
+            font-weight: 600;
+            text-transform: uppercase;
+        }
+        
+        .priority-badge.high {
+            background: rgba(239, 68, 68, 0.2);
+            color: #ef4444;
+        }
+        
+        .priority-badge.medium {
+            background: rgba(245, 158, 11, 0.2);
+            color: #f59e0b;
+        }
+        
+        .priority-badge.low {
+            background: rgba(59, 130, 246, 0.2);
+            color: #3b82f6;
+        }
+
+        .alt-rec-description {
+            font-size: 0.9rem;
+            color: var(--text-secondary);
+            margin-bottom: 10px;
+            line-height: 1.5;
+        }
+
+        .alt-rec-source {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+        }
+
+        /* Crop Detail View */
+        .crop-detail-view {
+            background: var(--gradient-card);
+            border-radius: 24px;
+            padding: 32px;
+        }
+
+        .detail-main {
+            margin-top: 25px;
+        }
+
+        .detail-stats {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-box {
+            background: var(--surface);
+            border-radius: 16px;
+            padding: 20px;
+            text-align: center;
+            border: 1px solid var(--border);
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--primary);
+            margin-bottom: 8px;
+        }
+
+        .stat-label {
+            font-size: 0.9rem;
+            color: var(--text-muted);
+        }
+
+        .progress-section {
+            margin: 30px 0;
+        }
+
+        .progress-label {
+            color: var(--text-secondary);
+            margin-bottom: 12px;
+            font-size: 0.95rem;
+        }
+
+        .progress-bar-large {
+            height: 16px;
+            background: var(--surface);
+            border-radius: 20px;
+            overflow: hidden;
+            margin-bottom: 12px;
+        }
+
+        .progress-bar-large .progress-fill {
+            height: 100%;
+        }
+
+        .detail-section {
+            margin: 30px 0;
+            padding: 25px;
+            background: var(--surface);
+            border-radius: 16px;
+            border: 1px solid var(--border);
+        }
+
+        .detail-section h4 {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-bottom: 20px;
+            font-size: 1.1rem;
+            color: var(--text-primary);
+        }
+
+        .detail-section h4 i {
+            color: var(--primary);
+        }
+
+        /* Planting Calendar Modal */
+        .planting-calendar-modal {
+            max-width: 600px;
+        }
+
+        .calendar-popup {
+            background: var(--surface);
+            border-radius: 16px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+
+        .calendar-popup-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .calendar-popup-header h5 {
+            font-size: 1.2rem;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .btn-calendar-nav {
+            background: var(--surface-light);
+            border: 1px solid var(--border);
+            color: var(--text-secondary);
+            width: 36px;
+            height: 36px;
+            border-radius: 10px;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s ease;
+            border: none;
+        }
+
+        .btn-calendar-nav:hover {
+            background: var(--surface-hover);
+            color: var(--text-primary);
+        }
+
+        .calendar-popup-weekdays {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 5px;
+            margin-bottom: 10px;
+            text-align: center;
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            font-weight: 500;
+        }
+
+        .calendar-popup-days {
+            display: grid;
+            grid-template-columns: repeat(7, 1fr);
+            gap: 5px;
+        }
+
+        .calendar-popup-day {
+            aspect-ratio: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            position: relative;
+            color: var(--text-secondary);
+            user-select: none;
+        }
+
+        .calendar-popup-day:hover:not(.empty):not(.past):not(.future) {
+            background: var(--surface-hover);
+            color: var(--text-primary);
+        }
+
+        .calendar-popup-day.selected {
+            background: var(--primary);
+            color: white;
+            font-weight: 600;
+        }
+
+        .calendar-popup-day.today {
+            background: rgba(16, 185, 129, 0.2);
+            color: var(--primary);
+            font-weight: 600;
+        }
+
+        .calendar-popup-day.past {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .calendar-popup-day.future {
+            opacity: 0.7;
+            cursor: not-allowed;
+        }
+
+        .calendar-popup-day.empty {
+            background: transparent;
+            cursor: default;
+        }
+
+        .today-badge {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            font-size: 0.6rem;
+            background: var(--primary);
+            color: white;
+            padding: 1px 4px;
+            border-radius: 4px;
+        }
+
+        .selected-date-display {
+            background: var(--surface);
+            border-radius: 12px;
+            padding: 15px;
+            margin-top: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .selected-date-label {
+            color: var(--text-muted);
+            font-size: 0.9rem;
+        }
+
+        .selected-date-value {
+            color: var(--text-primary);
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+
+        /* Weather Check */
+        .weather-check {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 12px;
+            padding: 12px;
+            margin-top: 15px;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .weather-check i {
+            color: #3b82f6;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 768px) {
+            #top_bar {
+                padding: 16px;
+            }
+
+            .c_head {
+                font-size: 1.3rem;
+            }
+
+            .weather-widget {
+                padding: 10px 16px;
+                display: none;
+            }
+
+            .main-content {
+                padding: 24px 16px;
+            }
+
+            .page-header {
+                flex-direction: column;
+                align-items: flex-start;
+                gap: 20px;
+            }
+
+            .page-header h2 {
+                font-size: 1.8rem;
+            }
+
+            .dashboard-grid {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+
+            .plants-grid {
+                grid-template-columns: repeat(2, 1fr);
+                gap: 16px;
+            }
+
+            .weather-container {
+                grid-template-columns: 1fr;
+            }
+
+            .fertilizer-container {
+                grid-template-columns: 1fr;
+            }
+
+            .recommendations-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .modal {
+                padding: 32px 24px;
+            }
+
+            .fertilizer-name-box {
+                padding: 20px;
+            }
+
+            .fertilizer-name-box h2 {
+                font-size: 1.5rem;
+            }
+
+            .details-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .result-actions {
+                flex-direction: column;
+            }
+
+            .result-actions .btn {
+                width: 100%;
+            }
+
+            .form-actions {
+                flex-direction: column;
+            }
+
+            .form-actions .btn {
+                width: 100%;
+            }
+
+            .notification {
+                max-width: 300px;
+            }
+        }
+
+        @media (max-width: 480px) {
+            .plants-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .crops-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .stat-box {
+                padding: 15px;
+            }
+
+            .stat-value {
+                font-size: 1.5rem;
+            }
+        }
+
+        /* Additional Utilities */
+        .info-note {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 12px;
+            padding: 16px;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .info-note i {
+            color: #3b82f6;
+        }
+
+        .image-preview {
+            position: relative;
+            margin: 20px 0;
+        }
+
+        .image-preview img {
+            width: 100%;
+            border-radius: 16px;
+            max-height: 300px;
+            object-fit: cover;
+        }
+
+        .preview-overlay {
+            position: absolute;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: 500;
+            border-radius: 16px;
+        }
+
+        .manual-result {
+            border-radius: 16px;
+            padding: 30px;
+            margin: 20px 0;
+        }
+
+        .manual-result.warning {
+            background: rgba(245, 158, 11, 0.1);
+            border: 1px solid rgba(245, 158, 11, 0.3);
+        }
+
+        .manual-result.info {
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+        }
+
+        .result-summary p {
+            margin: 10px 0;
+            color: var(--text-secondary);
+        }
+
+        .result-summary strong {
+            color: var(--text-primary);
+            margin-right: 10px;
+        }
+
+        .result-recommendations ul {
+            padding-left: 20px;
+            margin: 15px 0;
+        }
+
+        .result-recommendations li {
+            margin: 8px 0;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+    </style>
 </head>
 <body>
+    <!-- Overlay for sidebar -->
+    <div class="overlay" id="overlay"></div>
+
+    <!-- Notification Container -->
+    <div id="notificationContainer" class="notification-container"></div>
+
     <!-- Location Modal -->
-    <div id="locationModal" class="modal">
-        <div class="modal-content">
-            <!-- Close Button -->
-            <button id="closeModalBtn" class="close-btn">
-                <i class="bi bi-x-lg"></i>
-            </button>
-            
-            <h2>Set Your Location</h2>
-            <p>To provide accurate weather data and crop recommendations</p>
-            <div class="location-options">
-                <button id="autoDetectBtn" class="btn-primary">
-                    <i class="bi bi-geo-alt"></i> Auto Detect Location
-                </button>
-                <div class="divider">OR</div>
-                <div class="manual-location">
-                    <input type="text" id="manualLocation" placeholder="Enter your city or region">
-                    <button id="manualSubmitBtn" class="btn-secondary">Submit</button>
+    <div id="locationModal" class="modal-overlay">
+        <div class="modal">
+            <div class="modal-header">
+                <h4>Set Your Location</h4>
+                <button class="btn-close" id="closeModalBtn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p style="color: var(--text-secondary); margin-bottom: 24px;">To provide accurate weather data and crop recommendations</p>
+                <div class="location-options">
+                    <button id="autoDetectBtn" class="btn-primary">
+                        <i class="bi bi-geo-alt"></i> Auto Detect Location
+                    </button>
+                    <div style="color: var(--text-muted); font-size: 0.85rem; position: relative; text-align: center; margin: 20px 0;">
+                        <span style="background: var(--background); padding: 0 15px; position: relative; z-index: 1;">OR</span>
+                        <div style="position: absolute; top: 50%; left: 0; right: 0; height: 1px; background: var(--border); transform: translateY(-50%);"></div>
+                    </div>
+                    <div class="manual-location">
+                        <input type="text" id="manualLocation" placeholder="Enter your city or region">
+                        <button id="manualSubmitBtn" class="btn-outline">Submit</button>
+                    </div>
                 </div>
             </div>
         </div>
@@ -37,28 +1889,25 @@
         <!-- Top Bar -->
         <div id="top_bar">
             <i class="bi bi-list" id="menuToggle"></i>
-            <h1 class="c_head">Smart Crop Advisory System</h1>
+            <h1 class="c_head">🌱 Smart Crop Advisory System</h1>
             <div id="weatherWidget" class="weather-widget">
-                <i class="bi bi-cloud-sun"></i>
-                <span id="weatherInfo">Loading weather...</span>
+                <i class="bi bi-cloud-sun-fill"></i>
+                <span id="weatherInfo">Detecting location...</span>
             </div>
         </div>
 
         <!-- Side Navigation -->
         <div id="side_nav" class="side-nav">
             <div class="nav-header">
-                <h3>Navigation</h3>
+                <h3>🌱 Navigation</h3>
                 <i class="bi bi-x-lg" id="closeNav"></i>
             </div>
             <ul class="nav-menu">
-                <li><a href="#" class="nav-item active" data-page="home"><i class="bi bi-house"></i> Home Dashboard</a></li>
+                <li><a href="#" class="nav-item active" data-page="home"><i class="bi bi-house-fill"></i> Home Dashboard</a></li>
                 <li><a href="#" class="nav-item" data-page="plants"><i class="bi bi-flower1"></i> Select Plants</a></li>
-                <li><a href="#" class="nav-item" data-page="pest"><i class="bi bi-bug"></i> Pest & Disease Detection</a></li>
-                <li><a href="#" class="nav-item" data-page="weather"><i class="bi bi-cloud-sun"></i> Weather History</a></li>
-                <li><a href="#" class="nav-item" data-page="calendar"><i class="bi bi-calendar-event"></i> Crop Calendar</a></li>
-                
-                <!-- Fertilizer Recommendation -->
-                <li><a href="#" class="nav-item" data-page="fertilizer"><i class="bi bi-droplet-fill"></i> Fertilizer Recommendation</a></li>
+                <li><a href="#" class="nav-item" data-page="pest"><i class="bi bi-bug-fill"></i> Pest Detection</a></li>
+                <li><a href="#" class="nav-item" data-page="weather"><i class="bi bi-cloud-sun-fill"></i> Weather History</a></li>
+                <li><a href="#" class="nav-item" data-page="fertilizer"><i class="bi bi-droplet-fill"></i> Fertilizer</a></li>
                 <li><a href="#" class="nav-item" id="logoutBtn"><i class="bi bi-box-arrow-right"></i> Logout</a></li>
             </ul>
         </div>
@@ -70,7 +1919,7 @@
                 <div class="page-header">
                     <h2>Farm Dashboard</h2>
                     <div class="location-display">
-                        <i class="bi bi-geo-alt"></i>
+                        <i class="bi bi-geo-alt-fill"></i>
                         <span id="currentLocation">Location not set</span>
                         <button id="changeLocation" class="btn-small">Change</button>
                     </div>
@@ -78,14 +1927,14 @@
                 
                 <div class="dashboard-grid">
                     <div class="dashboard-card">
-                        <h3>Current Crop</h3>
+                        <h3><i class="bi bi-flower1"></i> Current Crop</h3>
                         <div id="currentCrop" class="crop-info">
-                            <p>No crop selected</p>
+                            <!-- Crops will be populated by JavaScript -->
                         </div>
                     </div>
                     
                     <div id="growthProgressCard" class="dashboard-card">
-                        <h3>Growth Progress</h3>
+                        <h3><i class="bi bi-graph-up"></i> Growth Progress</h3>
                         <div class="progress-container">
                             <div class="progress-bar">
                                 <div class="progress-fill" style="width: 0%"></div>
@@ -95,17 +1944,27 @@
                     </div>
                     
                     <div id="todaysTasksCard" class="dashboard-card">
-                        <h3>Today's Tasks</h3>
+                        <h3><i class="bi bi-check-circle"></i> Today's Tasks</h3>
                         <div id="todaysTasks" class="tasks-list">
                             <p>No tasks scheduled</p>
                         </div>
                     </div>
                     
                     <div class="dashboard-card">
-                        <h3>Weather Impact</h3>
+                        <h3><i class="bi bi-cloud-sun"></i> Weather Impact</h3>
                         <div id="weatherImpact" class="impact-info">
                             <p>Weather data needed</p>
                         </div>
+                    </div>
+                </div>
+
+                <!-- AI Recommendations Section -->
+                <div class="ai-recommendations">
+                    <div class="page-header" style="margin-bottom: 20px;">
+                        <h2>AI Recommendations</h2>
+                    </div>
+                    <div id="currentRecommendation" class="recommendations-grid">
+                        <!-- Single AI recommendation will be populated by JavaScript -->
                     </div>
                 </div>
             </div>
@@ -113,6 +1972,7 @@
             <!-- Plant Selection Page -->
             <div id="plantsPage" class="page">
                 <h2>Select Your Crops</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 30px;">Choose crops suitable for your location and season</p>
                 <div class="plants-grid">
                     <!-- Plants will be populated by JavaScript -->
                 </div>
@@ -121,43 +1981,48 @@
             <!-- Pest Detection Page -->
             <div id="pestPage" class="page">
                 <h2>Pest & Disease Detection</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 30px;">Upload plant images for AI-powered analysis</p>
+                
                 <div class="upload-area">
                     <i class="bi bi-cloud-arrow-up"></i>
                     <p>Upload plant image for analysis</p>
                     <input type="file" id="imageUpload" accept="image/*">
                     <button class="btn-primary" onclick="document.getElementById('imageUpload').click()">
-                        Choose Image
+                        <i class="bi bi-upload"></i> Choose Image
                     </button>
                 </div>
-                <div id="detectionResult" class="result-area"></div>
+                
+                <div id="detectionResult" class="result-area">
+                    <!-- Detection results will be populated by JavaScript -->
+                </div>
             </div>
 
             <!-- Weather History Page -->
             <div id="weatherPage" class="page">
                 <h2>Weather History & Forecast</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 30px;">Past weather data and future predictions</p>
+                
                 <div class="weather-container">
                     <div class="past-weather">
                         <h3>Past 10 Days</h3>
-                        <div id="pastWeather" class="weather-days"></div>
+                        <div id="pastWeather" class="weather-days">
+                            <!-- Past weather will be populated by JavaScript -->
+                        </div>
                     </div>
                     <div class="future-weather">
                         <h3>Next 5 Days Forecast</h3>
-                        <div id="futureWeather" class="weather-days"></div>
+                        <div id="futureWeather" class="weather-days">
+                            <!-- Future weather will be populated by JavaScript -->
+                        </div>
                     </div>
-                </div>
-            </div>
-
-            <!-- Crop Calendar Page -->
-            <div id="calendarPage" class="page">
-                <h2>Crop Management Calendar</h2>
-                <div id="calendar" class="calendar-container">
-                    <!-- Calendar will be populated by JavaScript -->
                 </div>
             </div>
 
             <!-- Fertilizer Recommendation Page -->
             <div id="fertilizerPage" class="page">
                 <h2>Fertilizer Recommendation</h2>
+                <p style="color: var(--text-secondary); margin-bottom: 30px;">Get AI-powered fertilizer recommendations for your crops</p>
+                
                 <div class="fertilizer-container">
                     <div class="fert-form">
                         <label for="fertCrop"><i class="bi bi-flower1"></i> Crop Type</label>
@@ -182,6 +2047,213 @@
         </div>
     </div>
 
-    <script type= "module" src="home.js"></script>
+    <!-- Hidden canvas for image preview -->
+    <canvas id="previewCanvas" style="display: none;"></canvas>
+
+    <script src="home.js"></script>
+    <script>
+        // Fix for delete button and calendar modal closing
+        document.addEventListener('DOMContentLoaded', function() {
+            console.log('DOM loaded, fixing delete button and calendar...');
+            
+            // Fix 1: Event delegation for delete buttons
+            document.addEventListener('click', function(e) {
+                // Handle delete button clicks
+                if (e.target.classList.contains('remove-crop-btn') || 
+                    e.target.closest('.remove-crop-btn')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    const btn = e.target.classList.contains('remove-crop-btn') ? 
+                               e.target : e.target.closest('.remove-crop-btn');
+                    
+                    const plantingId = parseInt(btn.getAttribute('data-planting-id'));
+                    console.log('Delete button clicked for planting ID:', plantingId);
+                    
+                    if (plantingId && window.removeCrop) {
+                        window.removeCrop(plantingId);
+                    } else if (plantingId && window.userCrops) {
+                        // Fallback if removeCrop doesn't exist
+                        if (confirm('Are you sure you want to remove this crop?')) {
+                            window.userCrops = window.userCrops.filter(crop => crop.planting_id !== plantingId);
+                            if (window.updateDashboardWithAllCrops) {
+                                window.updateDashboardWithAllCrops();
+                            }
+                            alert('Crop removed successfully!');
+                        }
+                    }
+                }
+                
+                // Handle calendar day clicks
+                if (e.target.classList.contains('calendar-popup-day') && 
+                    !e.target.classList.contains('empty') && 
+                    !e.target.classList.contains('past') && 
+                    !e.target.classList.contains('future')) {
+                    
+                    // Find the modal
+                    const modal = e.target.closest('.modal-overlay');
+                    if (modal) {
+                        // Select the date
+                        const date = e.target.getAttribute('data-date');
+                        const dateObj = new Date(date);
+                        
+                        // Update selected date display
+                        const selectedDateEl = modal.querySelector('#selectedPlantingDate');
+                        const dateInputEl = modal.querySelector('#plantingDateInput');
+                        
+                        if (selectedDateEl) selectedDateEl.textContent = dateObj.toLocaleDateString();
+                        if (dateInputEl) dateInputEl.value = date;
+                        
+                        // Remove selected class from all days
+                        modal.querySelectorAll('.calendar-popup-day').forEach(day => {
+                            day.classList.remove('selected');
+                        });
+                        
+                        // Add selected class to clicked day
+                        e.target.classList.add('selected');
+                    }
+                }
+                
+                // Handle confirm planting button
+                if (e.target.id === 'confirmPlanting' || 
+                    e.target.closest('#confirmPlanting')) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    
+                    const modal = e.target.closest('.modal-overlay');
+                    if (modal) {
+                        const dateInput = modal.querySelector('#plantingDateInput');
+                        const cropName = modal.querySelector('h4')?.textContent?.replace('Plant ', '') || '';
+                        
+                        if (dateInput && dateInput.value && cropName) {
+                            // Close modal first
+                            modal.classList.remove('active');
+                            setTimeout(() => {
+                                if (modal.parentNode) {
+                                    modal.remove();
+                                }
+                            }, 300);
+                            
+                            // Call confirmPlanting function
+                            if (window.confirmPlanting) {
+                                window.confirmPlanting(cropName, dateInput.value);
+                            } else {
+                                // Fallback
+                                console.log('Planting:', cropName, 'on', dateInput.value);
+                                alert(`Planted ${cropName} on ${new Date(dateInput.value).toLocaleDateString()}`);
+                            }
+                        }
+                    }
+                }
+                
+                // Close modal when clicking close button
+                if (e.target.classList.contains('btn-close') || 
+                    e.target.closest('.btn-close')) {
+                    e.preventDefault();
+                    const modal = e.target.closest('.modal-overlay');
+                    if (modal) {
+                        modal.classList.remove('active');
+                        setTimeout(() => {
+                            if (modal.parentNode) {
+                                modal.remove();
+                            }
+                        }, 300);
+                    }
+                }
+                
+                // Close modal when clicking cancel button
+                if (e.target.id === 'cancelPlanting' || 
+                    e.target.closest('#cancelPlanting')) {
+                    e.preventDefault();
+                    const modal = e.target.closest('.modal-overlay');
+                    if (modal) {
+                        modal.classList.remove('active');
+                        setTimeout(() => {
+                            if (modal.parentNode) {
+                                modal.remove();
+                            }
+                        }, 300);
+                    }
+                }
+                
+                // Close modal when clicking outside
+                if (e.target.classList.contains('modal-overlay')) {
+                    e.target.classList.remove('active');
+                    setTimeout(() => {
+                        if (e.target.parentNode) {
+                            e.target.remove();
+                        }
+                    }, 300);
+                }
+            });
+            
+            // Fix 2: Monkey patch to ensure modals are displayed
+            const originalAppendChild = document.body.appendChild;
+            document.body.appendChild = function(element) {
+                const result = originalAppendChild.call(this, element);
+                
+                if (element.classList && element.classList.contains('modal-overlay')) {
+                    setTimeout(() => {
+                        element.style.display = 'flex';
+                        element.classList.add('active');
+                    }, 10);
+                }
+                
+                return result;
+            };
+            
+            // Fix 3: Ensure modal close with Escape key
+            document.addEventListener('keydown', function(e) {
+                if (e.key === 'Escape') {
+                    const modal = document.querySelector('.modal-overlay.active');
+                    if (modal) {
+                        modal.classList.remove('active');
+                        setTimeout(() => modal.remove(), 300);
+                    }
+                }
+            });
+            
+            // Fix 4: Ensure removeCrop function exists
+            if (typeof window.removeCrop === 'undefined' && window.userCrops) {
+                window.removeCrop = function(plantingId) {
+                    if (confirm('Are you sure you want to remove this crop? This will delete all associated data.')) {
+                        window.userCrops = window.userCrops.filter(crop => crop.planting_id !== plantingId);
+                        
+                        if (window.selectedCrop && window.selectedCrop.planting_id === plantingId) {
+                            window.selectedCrop = null;
+                            window.currentPlantingId = null;
+                        }
+                        
+                        if (window.saveUserProgressToSupabase) {
+                            window.saveUserProgressToSupabase();
+                        }
+                        
+                        if (window.updateDashboardWithAllCrops) {
+                            window.updateDashboardWithAllCrops();
+                        }
+                        
+                        if (window.showNotification) {
+                            window.showNotification('info', 'Crop Removed', 'Crop has been removed from your account.');
+                        }
+                    }
+                };
+            }
+        });
+        
+        // Ensure modal works even after dynamic content loads
+        setTimeout(() => {
+            // Re-bind event listeners for modals
+            document.querySelectorAll('.btn-close').forEach(btn => {
+                btn.onclick = function() {
+                    const modal = this.closest('.modal-overlay');
+                    if (modal) {
+                        modal.classList.remove('active');
+                        setTimeout(() => modal.remove(), 300);
+                    }
+                };
+            });
+        }, 1000);
+    </script>
 </body>
 </html>
+
