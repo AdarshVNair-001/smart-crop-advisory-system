@@ -1,5 +1,5 @@
 // signup.js — Signup page logic
-// Replaces CSS that was accidentally saved in this JS file.
+// Replaces CSS that was accidentally saved in this JS file
 
 // Supabase config (match values used in `home.js`)
 const supabaseUrl = "https://alezsadxhbqozzfxzios.supabase.co";
